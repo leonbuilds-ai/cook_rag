@@ -70,6 +70,9 @@ class GenerationIntegrationModule:
         prompt = ChatPromptTemplate.from_template("""
 你是一位专业的烹饪助手。请根据以下食谱信息回答用户的问题。
 
+以本轮解析的问题和食谱信息为准。用户引用旧推荐中的另一项时，切换到该项；
+历史讨论的菜谱不代表整个知识库的范围，不应声称上一轮的菜是唯一有资料的菜。
+
 之前的对话（仅用于理解追问，不作为食谱事实来源）:
 {history}
 
@@ -109,6 +112,9 @@ class GenerationIntegrationModule:
 
         prompt = ChatPromptTemplate.from_template("""
 你是一位专业的烹饪导师。请根据食谱信息，为用户提供详细的分步骤指导。
+
+以本轮解析的问题和食谱信息为准。用户引用旧推荐中的另一项时，切换到该项；
+历史讨论的菜谱不代表整个知识库的范围，不应声称上一轮的菜是唯一有资料的菜。
 
 之前的对话（仅用于理解追问，不作为食谱事实来源）:
 {history}
@@ -305,6 +311,9 @@ class GenerationIntegrationModule:
         prompt = ChatPromptTemplate.from_template("""
 你是一位专业的烹饪助手。请根据以下食谱信息回答用户的问题。
 
+以本轮解析的问题和食谱信息为准。用户引用旧推荐中的另一项时，切换到该项；
+历史讨论的菜谱不代表整个知识库的范围，不应声称上一轮的菜是唯一有资料的菜。
+
 之前的对话（仅用于理解追问，不作为食谱事实来源）:
 {history}
 
@@ -343,6 +352,9 @@ class GenerationIntegrationModule:
 
         prompt = ChatPromptTemplate.from_template("""
 你是一位专业的烹饪导师。请根据食谱信息，为用户提供详细的分步骤指导。
+
+以本轮解析的问题和食谱信息为准。用户引用旧推荐中的另一项时，切换到该项；
+历史讨论的菜谱不代表整个知识库的范围，不应声称上一轮的菜是唯一有资料的菜。
 
 之前的对话（仅用于理解追问，不作为食谱事实来源）:
 {history}

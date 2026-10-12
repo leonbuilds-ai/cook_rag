@@ -13,6 +13,21 @@ def recipe(name):
     return Document(page_content=f'# {name}\n原料和步骤', metadata={'dish_name': name, 'parent_id': name})
 
 
+DINNER = '''晚餐推荐：
+### 1. 经典家常组合（推荐）
+可以搭配一道**虎皮青椒**和一份**肉蛋盖饭**。
+* **虎皮青椒**：口感酸辣开胃。
+* **肉蛋盖饭**：适合单人晚餐。
+### 2. 快手简单晚餐
+时间紧迫可以选**葱油拌面**，只需约20分钟。
+### 3. 进阶大餐（需提前准备）
+可以尝试**老妈蹄花**，需要提前浸泡芸豆。
+### 💡 温馨提示
+“地三鲜”的信息不完整，暂时不选。
+'''
+DINNER_DOCS = [recipe(n) for n in ('虎皮青椒', '肉蛋盖饭', '葱油拌面', '老妈蹄花', '地三鲜')]
+
+
 class MemoryTests(unittest.TestCase):
     def setUp(self):
         self.memory = ConversationMemory()
@@ -66,6 +81,61 @@ class MemoryTests(unittest.TestCase):
         self.assertEqual([m.type for m in messages], ['human', 'ai', 'human', 'ai'])
         memory.clear()
         self.assertEqual(memory.messages(), [])
+
+    def test_dinner_headings_map_whole_sections_and_combination(self):
+        self.memory.remember('晚餐吃什么', DINNER, DINNER_DOCS)
+        menu = self.memory.menus[0]
+        self.assertEqual(menu[1].recipes, ('虎皮青椒', '肉蛋盖饭'))
+        self.assertEqual(menu[2].recipes, ('葱油拌面',))
+        self.assertEqual(menu[3].recipes, ('老妈蹄花',))
+        self.assertNotIn('地三鲜', menu[3].recipes)
+        group = self.memory.resolve('这个：1. 经典家常组合', [], self.llm)
+        self.assertIn('虎皮青椒', group.query)
+        self.assertIn('肉蛋盖饭', group.query)
+
+    def test_switch_back_to_original_menu_after_follow_up(self):
+        self.memory.remember('晚餐吃什么', DINNER, DINNER_DOCS)
+        first = self.memory.resolve('这个： 2. 快手简单晚餐', [], self.llm)
+        self.assertEqual(first.query, '葱油拌面怎么做？')
+        self.memory.remember('这个： 2. 快手简单晚餐', '## 葱油拌面\n1. 炸葱油\n2. 煮面\n3. 拌匀', [recipe('葱油拌面')])
+        for question in ('那这个呢？：3. 进阶大餐', '第三个怎么做', '之前的进阶大餐呢'):
+            self.assertIn('老妈蹄花', self.memory.resolve(question, [], self.llm).query)
+            self.assertNotIn('葱油拌面', self.memory.resolve(question, [], self.llm).query)
+        self.memory.remember('3. 进阶大餐', '老妈蹄花的详细做法', [recipe('老妈蹄花')])
+        self.assertIn('葱油拌面', self.memory.resolve('再看2. 快手简单晚餐', [], self.llm).query)
+        self.llm.invoke.assert_not_called()
+
+    def test_menu_anchors_survive_long_answers_and_turn_pruning(self):
+        memory = ConversationMemory(max_turns=2, max_chars=600)
+        memory.remember('晚餐吃什么', DINNER, DINNER_DOCS)
+        for _ in range(3):
+            memory.remember('它怎么做', '葱油拌面' + '详细做法' * 200, [recipe('葱油拌面')])
+        self.assertNotIn(DINNER, [t.answer for t in memory.turns])
+        self.assertIn('老妈蹄花', memory.resolve('3. 进阶大餐', [], self.llm).query)
+        memory.clear()
+        self.assertTrue(memory.resolve('3. 进阶大餐', [], self.llm).clarification)
+        self.assertEqual(memory.menus, [])
+
+    def test_new_recommendation_menu_takes_number_precedence(self):
+        self.memory.remember('晚餐吃什么', DINNER, DINNER_DOCS)
+        self.memory.remember('重新推荐', '1. 麻婆豆腐\n2. 西红柿炒鸡蛋', self.docs)
+        self.assertIn('西红柿炒鸡蛋', self.memory.resolve('第二个怎么做', [], self.llm).query)
+        self.assertTrue(self.memory.resolve('第三个', [], self.llm).clarification)
+        self.assertIn('老妈蹄花', self.memory.resolve('之前的3. 进阶大餐', [], self.llm).query)
+
+    def test_conflicting_number_and_title_does_not_pin_recent_dish(self):
+        self.memory.remember('晚餐吃什么', DINNER, DINNER_DOCS)
+        self.memory.remember('第二个', '葱油拌面做法', [recipe('葱油拌面')])
+        self.assertTrue(self.memory.resolve('这个2. 进阶大餐', [], self.llm).clarification)
+        self.assertTrue(self.memory.resolve('这个：4. 不存在的套餐', [], self.llm).clarification)
+        self.assertTrue(self.memory.resolve('这个：2. 不存在的套餐', [], self.llm).clarification)
+
+    def test_combo_detail_does_not_replace_recommendation_numbering(self):
+        self.memory.remember('晚餐吃什么', DINNER, DINNER_DOCS)
+        self.memory.remember('这个：1. 经典家常组合（推荐）',
+            '### 1. 虎皮青椒\n制作方法\n### 2. 肉蛋盖饭\n制作方法', DINNER_DOCS[:2])
+        self.assertEqual(len(self.memory.menus), 1)
+        self.assertIn('老妈蹄花', self.memory.resolve('第三个怎么做', [], self.llm).query)
 
 
 class SystemTests(unittest.TestCase):
@@ -137,6 +207,20 @@ class SystemTests(unittest.TestCase):
         generation.generate_basic_answer('这个怎么做', [recipe('麻婆豆腐')], history=memory.messages())
         self.assertIn('不要鸡蛋', captured[0].content)
         self.assertIn('推荐麻婆豆腐', captured[0].content)
+
+    def test_user_reported_three_turn_flow_retrieves_new_recipe(self):
+        self.system.data_module.documents = DINNER_DOCS
+        self.system.retrieve.return_value = (DINNER_DOCS, Mock())
+        self.system.generation_module.generate_basic_answer.return_value = DINNER
+        self.system.ask_question('晚餐吃什么')
+        self.system.retrieve.return_value = ([recipe('葱油拌面')], Mock())
+        self.system.generation_module.generate_step_by_step_answer.return_value = '葱油拌面的详细做法'
+        self.system.ask_question('这个： 2. 快手简单晚餐')
+        self.assertEqual(self.system.retrieve.call_args.args[0], '葱油拌面怎么做？')
+        self.system.retrieve.return_value = ([recipe('老妈蹄花')], Mock())
+        self.system.generation_module.generate_step_by_step_answer.return_value = '老妈蹄花的详细做法'
+        self.assertIn('老妈蹄花', self.system.ask_question('那这个呢？：3. 进阶大餐'))
+        self.assertEqual(self.system.retrieve.call_args.args[0], '老妈蹄花怎么做？')
 
 
 if __name__ == '__main__':

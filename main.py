@@ -98,6 +98,8 @@ class RecipeRAGSystem:
         if resolution.clarification:
             return resolution.clarification, None
         history = self.conversation.messages()
+        if explain_routing and resolution.query != question:
+            print(f'追问解析: {resolution.query}')
         docs, analysis = self.retrieve(resolution.query, strategy)
         if explain_routing:
             print(f'检索策略: {analysis.recommended_strategy.value}；{analysis.reasoning}')
