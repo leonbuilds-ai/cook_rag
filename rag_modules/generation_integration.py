@@ -295,6 +295,8 @@ class GenerationIntegrationModule:
         for i, doc in enumerate(dishes[:limit], 1):
             details = [doc.metadata[key] for key in ('category', 'difficulty')
                        if doc.metadata.get(key) and doc.metadata[key] != '未知']
+            if doc.metadata.get('preference_evidence'):
+                details.append(doc.metadata['preference_evidence'])
             suffix = f"（{'，'.join(details)}）" if details else ''
             rows.append(f"{i}. {doc.metadata['dish_name']}{suffix}")
         return '为你推荐：\n' + '\n'.join(rows) + '\n\n可以回复编号或菜名，我再给你做法。'

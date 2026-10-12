@@ -2,6 +2,7 @@
 import json
 import re
 import logging
+from difflib import SequenceMatcher
 from dataclasses import dataclass
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 
@@ -9,6 +10,7 @@ from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 NUMBERS = {'一': 1, '二': 2, '两': 2, '三': 3, '四': 4, '五': 5,
            '六': 6, '七': 7, '八': 8, '九': 9, '十': 10}
 logger = logging.getLogger(__name__)
+BARE_NUMBER = r'\s*(?:选择|我选|我要|选|要)?\s*(\d+|[一二三四五六七八九十两])\s*(?:号)?[。！？!?]?\s*'
 
 
 def number(text):
@@ -75,10 +77,12 @@ class ConversationMemory:
         self.turns = []
         # Keep compact recommendation anchors independently of long follow-up answers.
         self.menus = []
+        self.pending_recipe = None
 
     def clear(self):
         self.turns.clear()
         self.menus.clear()
+        self.pending_recipe = None
 
     def messages(self):
         # Keep complete role pairs, giving the newest turn the largest share of the budget.
@@ -100,7 +104,8 @@ class ConversationMemory:
         options = extract_options(answer, mentioned)
         choices = {index: option.recipes[0] for index, option in options.items() if len(option.recipes) == 1}
         menu_request = re.search(r'推荐|吃什么|选项|菜单|有哪些|有什么|吃啥|喝什么', question)
-        selection = re.search(r'第\s*(?:\d+|[一二三四五六七八九十两])\s*(?:个|道|项)|\d+[.)、]', question)
+        selection = (re.search(r'第\s*(?:\d+|[一二三四五六七八九十两])\s*(?:个|道|项)|\d+[.)、]', question)
+                     or re.fullmatch(BARE_NUMBER, question))
         detail = re.search(r'怎么做|步骤|做法|制作|需要|多少', question)
         is_menu = options and not selection and (menu_request or (len(mentioned) > 1 and not detail))
         if is_menu:
@@ -126,6 +131,14 @@ class ConversationMemory:
         return FollowUp(f'{names}怎么做？')
 
     def resolve(self, question, known_names, llm):
+        if self.pending_recipe:
+            pending = self.pending_recipe
+            self.pending_recipe = None
+            confirmation = question.strip().strip('。！？!?').lower()
+            if confirmation in {'是', '是的', '对', '对的', '没错', '确认', '就是这个', '就是它', 'yes', 'y'}:
+                return FollowUp(f'{pending}怎么做？')
+            if confirmation in {'不是', '不对', 'no', 'n'}:
+                return FollowUp(question, '请告诉我准确的菜名，或从推荐列表选择编号。')
         references = re.search(r'刚才|上面|上一条|那个|这个|这道|它|这样|之前|最初|前面|上上|原来|原先|继续|再|换|其他|别的|还有|还是|另一个|第\s*(?:\d+|[一二三四五六七八九十两])\s*(?:个|道|项)|(?<![\d.])\d+[.)、](?!\d)', question)
         # Explicit dish names indicate a self-contained query or a topic change.
         if any(name and name in question for name in known_names):
@@ -135,7 +148,8 @@ class ConversationMemory:
             return FollowUp(question, uses_history=False)
         ordinal = re.search(r'第\s*(\d+|[一二三四五六七八九十两])\s*(?:个|道|种|款|项)(?!步骤|操作|阶段)', question)
         copied = re.search(r'(?<![\d.])([0-9]+|[一二三四五六七八九十])[.)、]\s*(?!\d)', question)
-        index = number(ordinal[1]) if ordinal else number(copied[1]) if copied else None
+        bare = re.fullmatch(BARE_NUMBER, question)
+        index = number(ordinal[1]) if ordinal else number(copied[1]) if copied else number(bare[1]) if bare else None
         choices = self.turns[-1].choices if self.turns else {}
         # Titles and explicit numbering take priority over the most recently discussed dish.
         normalized = plain_title(question)
@@ -155,6 +169,19 @@ class ConversationMemory:
             if not option:
                 return FollowUp(question, '无法确定你选择的是哪道菜，请直接告诉我菜名，或选择最近推荐列表中有效的编号。')
             return self.select(option, question)
+        # A near-matching short dish name must be confirmed before ingredient routing.
+        candidate = re.sub(r'^(?:请问|我想吃|我想做|想吃|想做)', '', question.strip())
+        candidate = re.sub(r'(?:怎么做|如何做|的做法|做法|制作方法)[？?。！!]*$', '', candidate).strip()
+        if re.fullmatch(r'[\u4e00-\u9fff]{4,12}', candidate):
+            close = sorted(((SequenceMatcher(None, candidate, name).ratio(), name) for name in known_names
+                            if abs(len(name) - len(candidate)) <= 1), reverse=True)
+            close = [(score, name) for score, name in close if score >= 0.74]
+            if close:
+                best = [name for score, name in close[:3] if score >= close[0][0] - 0.03]
+                if len(best) == 1:
+                    self.pending_recipe = best[0]
+                    return FollowUp(question, f'你说的“{candidate}”是否指“{best[0]}”？请回复“是”或完整菜名，确认后我再给你做法。')
+                return FollowUp(question, f'菜名可能接近：{"、".join(best)}。请告诉我准确的菜名。')
         if not self.turns:
             if re.search(r'刚才|上面|上一条|那个|这个|这道|它', question):
                 return FollowUp(question, '当前会话还没有可参考的菜谱，请先告诉我菜名。')

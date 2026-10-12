@@ -8,6 +8,7 @@ from config import DEFAULT_CONFIG
 from langchain_core.documents import Document
 from rag_modules.conversation import ConversationMemory
 from rag_modules.dialogue_intent import direct_intent, is_recommendation
+from rag_modules.recipe_preferences import wants_light, light_evidence
 from rag_modules import (GraphDataPreparationModule, QdrantIndexConstructionModule,
     RetrievalOptimizationModule, GenerationIntegrationModule, GraphRAGRetrieval, IntelligentQueryRouter)
 
@@ -71,6 +72,14 @@ class RecipeRAGSystem:
         if names and not any(word in question for word in ('相似', '类似', '搭配', '关系', '推荐')):
             filters['parent_id'] = [d.metadata['parent_id'] for d in self.data_module.documents
                                     if d.metadata['dish_name'] in names]
+        preference_evidence = {}
+        if wants_light(question):
+            preference_evidence = {d.metadata['parent_id']: light_evidence(d) for d in self.data_module.documents}
+            allowed = [key for key, evidence in preference_evidence.items() if evidence
+                       and ('parent_id' not in filters or key in filters['parent_id'])]
+            if not allowed:
+                return [], self.query_router.analyze_query(question)
+            filters['parent_id'] = allowed
         docs, analysis = self.query_router.route_query(question, top_k=candidate_k, filters=filters,
                                                       strategy=strategy)
         if self.config.enable_parent_doc_retrieval:
@@ -89,6 +98,10 @@ class RecipeRAGSystem:
                 if len(result) >= self.config.top_k:
                     break
             docs = result
+        if preference_evidence:
+            docs = [Document(page_content=d.page_content, metadata={**d.metadata,
+                    'preference_evidence': preference_evidence[d.metadata['parent_id']]}) for d in docs
+                    if preference_evidence.get(d.metadata['parent_id'])]
         return docs, analysis
 
     def ask_question_with_routing(self, question, stream=False, explain_routing=False, strategy='auto'):
