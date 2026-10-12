@@ -53,7 +53,7 @@ class GenerationIntegrationModule:
         
         logger.info("LLM初始化完成")
     
-    def generate_basic_answer(self, query: str, context_docs: List[Document]) -> str:
+    def generate_basic_answer(self, query: str, context_docs: List[Document], history=None) -> str:
         """
         生成基础回答
 
@@ -65,9 +65,13 @@ class GenerationIntegrationModule:
             生成的回答
         """
         context = self._build_context(context_docs)
+        history_text = self._format_history(history)
 
         prompt = ChatPromptTemplate.from_template("""
 你是一位专业的烹饪助手。请根据以下食谱信息回答用户的问题。
+
+之前的对话（仅用于理解追问，不作为食谱事实来源）:
+{history}
 
 用户问题: {question}
 
@@ -80,7 +84,7 @@ class GenerationIntegrationModule:
 
         # 使用LCEL构建链
         chain = (
-            {"question": RunnablePassthrough(), "context": lambda _: context}
+            {"question": RunnablePassthrough(), "context": lambda _: context, "history": lambda _: history_text}
             | prompt
             | self.llm
             | StrOutputParser()
@@ -89,7 +93,7 @@ class GenerationIntegrationModule:
         response = chain.invoke(query)
         return response
     
-    def generate_step_by_step_answer(self, query: str, context_docs: List[Document]) -> str:
+    def generate_step_by_step_answer(self, query: str, context_docs: List[Document], history=None) -> str:
         """
         生成分步骤回答
 
@@ -101,9 +105,13 @@ class GenerationIntegrationModule:
             分步骤的详细回答
         """
         context = self._build_context(context_docs)
+        history_text = self._format_history(history)
 
         prompt = ChatPromptTemplate.from_template("""
 你是一位专业的烹饪导师。请根据食谱信息，为用户提供详细的分步骤指导。
+
+之前的对话（仅用于理解追问，不作为食谱事实来源）:
+{history}
 
 用户问题: {question}
 
@@ -135,7 +143,7 @@ class GenerationIntegrationModule:
 回答:""")
 
         chain = (
-            {"question": RunnablePassthrough(), "context": lambda _: context}
+            {"question": RunnablePassthrough(), "context": lambda _: context, "history": lambda _: history_text}
             | prompt
             | self.llm
             | StrOutputParser()
@@ -280,7 +288,7 @@ class GenerationIntegrationModule:
         else:
             return f"为您推荐以下菜品：\n" + "\n".join([f"{i+1}. {name}" for i, name in enumerate(dish_names[:3])]) + f"\n\n还有其他 {len(dish_names)-3} 道菜品可供选择。"
 
-    def generate_basic_answer_stream(self, query: str, context_docs: List[Document]):
+    def generate_basic_answer_stream(self, query: str, context_docs: List[Document], history=None):
         """
         生成基础回答 - 流式输出
 
@@ -292,9 +300,13 @@ class GenerationIntegrationModule:
             生成的回答片段
         """
         context = self._build_context(context_docs)
+        history_text = self._format_history(history)
 
         prompt = ChatPromptTemplate.from_template("""
 你是一位专业的烹饪助手。请根据以下食谱信息回答用户的问题。
+
+之前的对话（仅用于理解追问，不作为食谱事实来源）:
+{history}
 
 用户问题: {question}
 
@@ -306,7 +318,7 @@ class GenerationIntegrationModule:
 回答:""")
 
         chain = (
-            {"question": RunnablePassthrough(), "context": lambda _: context}
+            {"question": RunnablePassthrough(), "context": lambda _: context, "history": lambda _: history_text}
             | prompt
             | self.llm
             | StrOutputParser()
@@ -315,7 +327,7 @@ class GenerationIntegrationModule:
         for chunk in chain.stream(query):
             yield chunk
 
-    def generate_step_by_step_answer_stream(self, query: str, context_docs: List[Document]):
+    def generate_step_by_step_answer_stream(self, query: str, context_docs: List[Document], history=None):
         """
         生成详细步骤回答 - 流式输出
 
@@ -327,9 +339,13 @@ class GenerationIntegrationModule:
             详细步骤回答片段
         """
         context = self._build_context(context_docs)
+        history_text = self._format_history(history)
 
         prompt = ChatPromptTemplate.from_template("""
 你是一位专业的烹饪导师。请根据食谱信息，为用户提供详细的分步骤指导。
+
+之前的对话（仅用于理解追问，不作为食谱事实来源）:
+{history}
 
 用户问题: {question}
 
@@ -361,7 +377,7 @@ class GenerationIntegrationModule:
 回答:""")
 
         chain = (
-            {"question": RunnablePassthrough(), "context": lambda _: context}
+            {"question": RunnablePassthrough(), "context": lambda _: context, "history": lambda _: history_text}
             | prompt
             | self.llm
             | StrOutputParser()
@@ -369,6 +385,13 @@ class GenerationIntegrationModule:
 
         for chunk in chain.stream(query):
             yield chunk
+
+    @staticmethod
+    def _format_history(history):
+        if not history:
+            return '无'
+        return '\n'.join(('用户' if message.type == 'human' else '助手') + ': ' + message.content
+                         for message in history)
 
     def _build_context(self, docs: List[Document], max_length: int = None) -> str:
         """

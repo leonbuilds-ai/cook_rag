@@ -30,7 +30,15 @@ python -m venv .venv
 .\.venv\Scripts\python.exe main.py --question "与西红柿炒鸡蛋相似的菜" --strategy combined
 ```
 
-交互模式支持 `stats`、`quit`。`--no-stream` 返回完整回答；`--retrieve-only` 显示检索文档、来源和图关系证据；`--strategy` 支持 `auto`、`hybrid_traditional`、`graph_rag`、`combined`。
+交互模式支持 `stats`、`clear`（清空对话）、`quit`。`--no-stream` 返回完整回答；`--retrieve-only` 显示检索文档、来源和图关系证据；`--strategy` 支持 `auto`、`hybrid_traditional`、`graph_rag`、`combined`。
+
+## 多轮对话
+
+同一次交互会话会记住近期问题和实际回答。例如先问“推荐几个素菜”，再问“第二个怎么做”或“它需要多少盐”。编号按上一条实际回答解析，不使用检索排序代替；普通回答和完整流式回答都会写入历史，中断或失败的流式输出不作为完整的一轮。
+
+一般追问通过模型改写成独立检索问题，回答模型也能看到近期对话；明确的新菜名可以切换话题。没有历史、编号无效或指代无法唯一确定时，会请求提供菜名或编号。输入 `clear` 开始新话题。
+
+记忆保存在当前 `RecipeRAGSystem` 实例中，默认最多 6 轮、6000 字符，可在 `config.py` 调整 `conversation_max_turns` / `conversation_max_chars`。退出程序或每次单独运行 `--question` 会开始新会话；暂不跨进程保存。直接调用 `retrieve()` 仍是无会话状态的检索接口；多轮 API 使用同一实例的 `ask_question()` 或 `ask_question_with_routing()`。
 
 ## 环境配置
 

@@ -47,6 +47,8 @@ class RAGConfig:
     parent_doc_top_n: int = 3
     parent_doc_max_chars: int = 6000
     context_max_chars: int = 18000
+    conversation_max_turns: int = 6
+    conversation_max_chars: int = 6000
 
     def __post_init__(self):
         if self.embedding_provider not in {'openai', 'ollama'} or self.llm_provider not in {'openai', 'ollama'}:
@@ -55,6 +57,8 @@ class RAGConfig:
             raise ValueError('批次、top_k 必须为正数，chunk_size 必须大于非负 chunk_overlap')
         if not 1 <= self.max_graph_depth <= 3:
             raise ValueError('max_graph_depth 必须在 1 到 3 之间')
+        if self.conversation_max_turns < 1 or self.conversation_max_chars < 500:
+            raise ValueError('会话记忆至少保留 1 轮，字符预算至少为 500')
 
     @classmethod
     def from_dict(cls, config_dict):
