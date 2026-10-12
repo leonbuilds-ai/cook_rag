@@ -2,9 +2,12 @@
 import argparse
 import json
 import logging
+import sys
+from collections import Counter
 from config import DEFAULT_CONFIG
 from langchain_core.documents import Document
 from rag_modules.conversation import ConversationMemory
+from rag_modules.dialogue_intent import direct_intent
 from rag_modules import (GraphDataPreparationModule, QdrantIndexConstructionModule,
     RetrievalOptimizationModule, GenerationIntegrationModule, GraphRAGRetrieval, IntelligentQueryRouter)
 
@@ -93,6 +96,21 @@ class RecipeRAGSystem:
             raise ValueError('请先初始化系统并构建知识库')
         if not question.strip():
             raise ValueError('问题不能为空')
+        intent = direct_intent(question)
+        if intent:
+            # Social messages leave recipe focus and recommendation anchors intact.
+            replies = {
+                'greeting': '你好！我是食谱助手，可以帮你推荐菜品、查询做法和食材。你今天想吃什么？',
+                'thanks': '不客气！有其他做菜问题可以继续问我。',
+                'acknowledgment': '好的，有需要可以继续问我。',
+                'help': '你可以问“晚餐吃什么”“葱油拌面怎么做”，也可以在推荐后问“第二个怎么做”。输入 stats 查看统计，clear 清空对话，quit 退出。',
+            }
+            if intent == 'catalog':
+                categories = Counter(d.metadata.get('category', '其他') for d in self.data_module.documents)
+                return (f'当前知识库共有 {len(self.data_module.documents)} 份食谱，分类包括：' +
+                        '、'.join(f'{name}（{count}份）' for name, count in sorted(categories.items())) +
+                        '。可以指定分类或食材，让我推荐几道菜。'), None
+            return replies[intent], None
         resolution = self.conversation.resolve(question,
             [d.metadata['dish_name'] for d in self.data_module.documents], self.generation_module.llm)
         if resolution.clarification:
@@ -136,10 +154,11 @@ class RecipeRAGSystem:
                 'routing': self.query_router.get_route_statistics() if self.query_router else {}}
 
     def run_interactive(self):
-        print('Neo4j + Qdrant 食谱助手（stats 查看统计，clear 清空对话，quit 退出）')
+        print('Neo4j + Qdrant 食谱助手（stats 查看统计，clear 清空对话，quit 退出）', flush=True)
+        print('系统已就绪，正在等待输入。输入问题后按 Enter 发送。', flush=True)
         while True:
             try:
-                question = input('\n您的问题: ').strip()
+                question = input('\n您的问题（输入后按 Enter）: ').strip()
                 if question.lower() in {'quit', 'exit', '退出'}:
                     break
                 if not question:
@@ -153,7 +172,7 @@ class RecipeRAGSystem:
                     continue
                 answer, _ = self.ask_question_with_routing(question, stream=True, explain_routing=True)
                 print_answer(answer)
-            except KeyboardInterrupt:
+            except (KeyboardInterrupt, EOFError):
                 break
             except Exception:
                 logger.exception('问答失败')
@@ -188,10 +207,14 @@ def main():
     parser.add_argument('--no-stream', action='store_true')
     parser.add_argument('--strategy', default='auto', choices=['auto', 'hybrid_traditional', 'graph_rag', 'combined'])
     args = parser.parse_args()
-    logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
+    # Use one flushed output stream so IDE stdout/stderr merging cannot reorder the prompt.
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s',
+                        stream=sys.stdout, force=True)
     logging.getLogger('httpx').setLevel(logging.WARNING)
+    logging.getLogger('jieba').setLevel(logging.WARNING)
     system = RecipeRAGSystem()
     try:
+        print('正在连接 Neo4j 和 Qdrant…', flush=True)
         system.initialize_system()
         if args.check:
             vector = system.index_module.embeddings.embed_query('食谱连接检查')
@@ -199,6 +222,7 @@ def main():
             print(f'Neo4j、Qdrant、嵌入和生成模型连接正常；向量维度={len(vector)}；生成={reply.content}')
             print('Recipe 数量:', system.data_module.run('MATCH (r:Recipe) RETURN count(r) AS count')[0]['count'])
             return
+        print('正在加载食谱并检查向量索引；首次构建需要等待…', flush=True)
         system.build_knowledge_base(args.import_local, args.rebuild)
         if args.build_only:
             print(json.dumps(system.statistics(), ensure_ascii=False, indent=2))
