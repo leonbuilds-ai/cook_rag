@@ -1,10 +1,9 @@
-langchain==0.3.26
+langchain-core>=0.3.76,<0.4
 langchain-ollama==0.3.10
+langchain-openai>=0.3.33,<0.4
 langchain-text-splitters==0.3.8
-langchain-unstructured==0.1.6
-langchain-community==0.3.27
-faiss-cpu>=1.7.0
-unstructured==0.18.11
-Markdown==3.8.2
-lazy_loader==0.4
-rank_bm25==0.2.2
+qdrant-client>=1.14.2,<1.15
+neo4j>=5.28,<6
+python-dotenv>=1.1,<2
+rank-bm25==0.2.2
+jieba==0.42.1

@@ -28,3 +28,6 @@ vector_index/
 # OS files
 Thumbs.db
 .DS_Store
+
+# Upstream reference checkout
+.upstream-c9/

@@ -1,315 +1,188 @@
-"""
-RAG系统主程序
-"""
-
-import sys
+"""C9-inspired recipe Graph RAG with Neo4j + Qdrant."""
+import argparse
+import json
 import logging
-from pathlib import Path
+from config import DEFAULT_CONFIG
+from langchain_core.documents import Document
+from rag_modules import (GraphDataPreparationModule, QdrantIndexConstructionModule,
+    RetrievalOptimizationModule, GenerationIntegrationModule, GraphRAGRetrieval, IntelligentQueryRouter)
 
-# 添加模块路径
-sys.path.append(str(Path(__file__).parent))
-
-from config import DEFAULT_CONFIG, RAGConfig
-from rag_modules import (
-    DataPreparationModule,
-    IndexConstructionModule,
-    RetrievalOptimizationModule,
-    GenerationIntegrationModule
-)
-
-# 配置日志
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logging.getLogger("httpx").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
+
 class RecipeRAGSystem:
-    """食谱RAG系统主类"""
-
-    def __init__(self, config: RAGConfig = None):
-        """
-        初始化RAG系统
-
-        Args:
-            config: RAG系统配置，默认使用DEFAULT_CONFIG
-        """
+    def __init__(self, config=None):
         self.config = config or DEFAULT_CONFIG
-        self.data_module = None
-        self.index_module = None
-        self.retrieval_module = None
-        self.generation_module = None
+        self.data_module = self.index_module = self.generation_module = None
+        self.retrieval_module = self.query_router = None
+        self.system_ready = False
 
-        # 检查数据路径
-        if not Path(self.config.data_path).exists():
-            raise FileNotFoundError(f"数据路径不存在: {self.config.data_path}")
-
-    
     def initialize_system(self):
-        """初始化所有模块"""
-        print("🚀 正在初始化RAG系统...")
+        self.data_module = GraphDataPreparationModule(self.config)
+        self.data_module.driver.verify_connectivity()
+        self.index_module = QdrantIndexConstructionModule(self.config)
+        self.index_module.client.get_collections()
+        self.generation_module = GenerationIntegrationModule(config=self.config)
 
-        # 1. 初始化数据准备模块
-        print("初始化数据准备模块...")
-        self.data_module = DataPreparationModule(self.config.data_path)
+    def build_knowledge_base(self, import_local=False, rebuild=False):
+        self.system_ready = False
+        if import_local:
+            logger.info('导入本地食谱: %s', self.data_module.import_local_recipes())
+        docs = self.data_module.load_documents()
+        if not docs:
+            logger.info('Neo4j 没有 Recipe，导入本地 Markdown 食谱')
+            self.data_module.import_local_recipes()
+            docs = self.data_module.load_documents()
+        chunks = self.data_module.chunk_documents(self.config.chunk_size, self.config.chunk_overlap)
+        if rebuild or self.index_module.load_index(chunks) is None:
+            self.index_module.build_vector_index(chunks)
+        self.retrieval_module = RetrievalOptimizationModule(self.index_module, chunks)
+        self.graph_rag_retrieval = GraphRAGRetrieval(self.config, self.data_module)
+        self.query_router = IntelligentQueryRouter(self.retrieval_module, self.graph_rag_retrieval, self.config)
+        self.system_ready = True
+        logger.info('知识库就绪: %s 个食谱，%s 个文本块', len(docs), len(chunks))
 
-        # 2. 初始化索引构建模块
-        print("初始化索引构建模块...")
-        self.index_module = IndexConstructionModule(
-            model_name=self.config.embedding_model,
-            index_save_path=self.config.index_save_path,
-            base_url=self.config.ollama_base_url,
-            num_ctx=self.config.embedding_num_ctx,
-            batch_size=self.config.embedding_batch_size,
-        )
-
-        # 3. 初始化生成集成模块
-        print("🤖 初始化生成集成模块...")
-        self.generation_module = GenerationIntegrationModule(
-            model_name=self.config.llm_model,
-            temperature=self.config.temperature,
-            max_tokens=self.config.max_tokens,
-            base_url=self.config.ollama_base_url,
-            num_ctx=self.config.ollama_num_ctx,
-        )
-
-        print("✅ 系统初始化完成！")
-    
-    def build_knowledge_base(self):
-        """构建知识库"""
-        print("\n正在构建知识库...")
-
-        # 1. 尝试加载已保存的索引
-        vectorstore = self.index_module.load_index()
-
-        if vectorstore is not None:
-            print("✅ 成功加载已保存的向量索引！")
-            # 仍需要加载文档和分块用于检索模块
-            print("加载食谱文档...")
-            self.data_module.load_documents()
-            print("进行文本分块...")
-            chunks = self.data_module.chunk_documents()
-        else:
-            print("未找到已保存的索引，开始构建新索引...")
-
-            # 2. 加载文档
-            print("加载食谱文档...")
-            self.data_module.load_documents()
-
-            # 3. 文本分块
-            print("进行文本分块...")
-            chunks = self.data_module.chunk_documents()
-
-            # 4. 构建向量索引
-            print("构建向量索引...")
-            vectorstore = self.index_module.build_vector_index(chunks)
-
-            # 5. 保存索引
-            print("保存向量索引...")
-            self.index_module.save_index()
-
-        # 6. 初始化检索优化模块
-        print("初始化检索优化...")
-        self.retrieval_module = RetrievalOptimizationModule(vectorstore, chunks)
-
-        # 7. 显示统计信息
-        stats = self.data_module.get_statistics()
-        print(f"\n📊 知识库统计:")
-        print(f"   文档总数: {stats['total_documents']}")
-        print(f"   文本块数: {stats['total_chunks']}")
-        print(f"   菜品分类: {list(stats['categories'].keys())}")
-        print(f"   难度分布: {stats['difficulties']}")
-
-        print("✅ 知识库构建完成！")
-    
-    def ask_question(self, question: str, stream: bool = False):
-        """
-        回答用户问题
-
-        Args:
-            question: 用户问题
-            stream: 是否使用流式输出
-
-        Returns:
-            生成的回答或生成器
-        """
-        if not all([self.retrieval_module, self.generation_module]):
-            raise ValueError("请先构建知识库")
-        
-        print(f"\n❓ 用户问题: {question}")
-
-        # 1. 查询路由
-        route_type = self.generation_module.query_router(question)
-        print(f"🎯 查询类型: {route_type}")
-
-        # 2. 智能查询重写（根据路由类型）
-        if route_type == 'list':
-            # 列表查询保持原查询
-            rewritten_query = question
-            print(f"📝 列表查询保持原样: {question}")
-        else:
-            # 详细查询和一般查询使用智能重写
-            print("🤖 智能分析查询...")
-            rewritten_query = self.generation_module.query_rewrite(question)
-        
-        # 3. 检索相关子块（自动应用元数据过滤）
-        print("🔍 检索相关文档...")
-        filters = self._extract_filters_from_query(question)
-        if filters:
-            print(f"应用过滤条件: {filters}")
-            relevant_chunks = self.retrieval_module.metadata_filtered_search(rewritten_query, filters, top_k=self.config.top_k)
-        else:
-            relevant_chunks = self.retrieval_module.hybrid_search(rewritten_query, top_k=self.config.top_k)
-
-        # 显示检索到的子块信息
-        if relevant_chunks:
-            chunk_info = []
-            for chunk in relevant_chunks:
-                dish_name = chunk.metadata.get('dish_name', '未知菜品')
-                # 尝试从内容中提取章节标题
-                content_preview = chunk.page_content[:100].strip()
-                if content_preview.startswith('#'):
-                    # 如果是标题开头，提取标题（仅取第一行）
-                    title_end = content_preview.find('\n') if '\n' in content_preview else len(content_preview)
-                    section_title = content_preview[:title_end].replace('#', '').strip()
-                    chunk_info.append(f"{dish_name}({section_title})")
-                else:
-                    chunk_info.append(f"{dish_name}(内容片段)")
-
-            print(f"找到 {len(relevant_chunks)} 个相关文档块: {', '.join(chunk_info)}")
-        else:
-            print(f"找到 {len(relevant_chunks)} 个相关文档块")
-
-        # 4. 检查是否找到相关内容
-        if not relevant_chunks:
-            return "抱歉，没有找到相关的食谱信息。请尝试其他菜品名称或关键词。"
-
-        # 5. 根据路由类型选择回答方式
-        if route_type == 'list':
-            # 列表查询：直接返回菜品名称列表
-            print("📋 生成菜品列表...")
-            relevant_docs = self.data_module.get_parent_documents(relevant_chunks)
-
-            # 显示找到的文档名称
-            doc_names = []
-            for doc in relevant_docs:
-                dish_name = doc.metadata.get('dish_name', '未知菜品')
-                doc_names.append(dish_name)
-
-            if doc_names:
-                print(f"找到文档: {', '.join(doc_names)}")
-
-            return self.generation_module.generate_list_answer(question, relevant_docs)
-        else:
-            # 详细查询：获取完整文档并生成详细回答
-            print("获取完整文档...")
-            relevant_docs = self.data_module.get_parent_documents(relevant_chunks)
-
-            # 显示找到的文档名称
-            doc_names = []
-            for doc in relevant_docs:
-                dish_name = doc.metadata.get('dish_name', '未知菜品')
-                doc_names.append(dish_name)
-
-            if doc_names:
-                print(f"找到文档: {', '.join(doc_names)}")
-            else:
-                print(f"对应 {len(relevant_docs)} 个完整文档")
-
-            print("✍️ 生成详细回答...")
-
-            # 根据路由类型自动选择回答模式
-            if route_type == "detail":
-                # 详细查询使用分步指导模式
-                if stream:
-                    return self.generation_module.generate_step_by_step_answer_stream(question, relevant_docs)
-                else:
-                    return self.generation_module.generate_step_by_step_answer(question, relevant_docs)
-            else:
-                # 一般查询使用基础回答模式
-                if stream:
-                    return self.generation_module.generate_basic_answer_stream(question, relevant_docs)
-                else:
-                    return self.generation_module.generate_basic_answer(question, relevant_docs)
-    
-    def _extract_filters_from_query(self, query: str) -> dict:
-        """
-        从用户问题中提取元数据过滤条件
-        """
+    def _extract_filters_from_query(self, query):
         filters = {}
-        # 分类关键词
-        category_keywords = DataPreparationModule.get_supported_categories()
-        for cat in category_keywords:
-            if cat in query:
-                filters['category'] = cat
+        for category in self.data_module.get_supported_categories():
+            if category in query:
+                filters['category'] = category
                 break
-
-        # 难度关键词
-        difficulty_keywords = DataPreparationModule.get_supported_difficulties()
-        for diff in sorted(difficulty_keywords, key=len, reverse=True):
-            if diff in query:
-                filters['difficulty'] = diff
+        for difficulty in sorted(self.data_module.get_supported_difficulties(), key=len, reverse=True):
+            if difficulty in query:
+                filters['difficulty'] = difficulty
                 break
-
         return filters
-    
+
+    def retrieve(self, question, strategy='auto'):
+        if not self.system_ready:
+            raise ValueError('请先初始化系统并构建知识库')
+        if not question.strip():
+            raise ValueError('问题不能为空')
+        candidate_k = self.config.top_k * 3 if self.config.enable_parent_doc_retrieval else self.config.top_k
+        filters = self._extract_filters_from_query(question)
+        names = self.graph_rag_retrieval.extract_entities(question)['recipes']
+        if names and any(word in question for word in ('怎么做', '步骤', '制作方法', '做法')):
+            filters['parent_id'] = [d.metadata['parent_id'] for d in self.data_module.documents
+                                    if d.metadata['dish_name'] in names]
+        docs, analysis = self.query_router.route_query(question, top_k=candidate_k, filters=filters,
+                                                      strategy=strategy)
+        if self.config.enable_parent_doc_retrieval:
+            parents = {d.metadata['parent_id']: d for d in self.data_module.documents}
+            result, seen = [], set()
+            for i, doc in enumerate(docs):
+                key = doc.metadata['parent_id']
+                if key in seen:
+                    continue
+                seen.add(key)
+                if len(result) < self.config.parent_doc_top_n and key in parents:
+                    parent = parents[key]
+                    doc = Document(page_content=parent.page_content[:self.config.parent_doc_max_chars],
+                                   metadata={**parent.metadata, **doc.metadata, 'doc_type': 'parent'})
+                result.append(doc)
+                if len(result) >= self.config.top_k:
+                    break
+            docs = result
+        return docs, analysis
+
+    def ask_question_with_routing(self, question, stream=False, explain_routing=False, strategy='auto'):
+        docs, analysis = self.retrieve(question, strategy)
+        if explain_routing:
+            print(f'检索策略: {analysis.recommended_strategy.value}；{analysis.reasoning}')
+        if not docs:
+            return '没有找到符合条件的食谱，请调整菜品、食材或过滤条件。', analysis
+        if any(word in question for word in ('怎么做', '步骤', '制作方法', '做法')):
+            generate = (self.generation_module.generate_step_by_step_answer_stream if stream
+                        else self.generation_module.generate_step_by_step_answer)
+        else:
+            generate = (self.generation_module.generate_basic_answer_stream if stream
+                        else self.generation_module.generate_basic_answer)
+        return generate(question, docs), analysis
+
+    def ask_question(self, question, stream=False):
+        return self.ask_question_with_routing(question, stream)[0]
+
+    def statistics(self):
+        return {**self.data_module.get_statistics(), **self.index_module.get_collection_stats(),
+                'routing': self.query_router.get_route_statistics() if self.query_router else {}}
+
     def run_interactive(self):
-        """运行交互式问答"""
-        print("=" * 60)
-        print("🍽️  尝尝咸淡RAG系统 - 交互式问答  🍽️")
-        print("=" * 60)
-        print("💡 解决您的选择困难症，告别'今天吃什么'的世纪难题！")
-        
-        # 初始化系统
-        self.initialize_system()
-        
-        # 构建知识库
-        self.build_knowledge_base()
-        
-        print("\n交互式问答 (输入'退出'结束):")
-        
+        print('Neo4j + Qdrant 食谱助手（stats 查看统计，quit 退出）')
         while True:
             try:
-                user_input = input("\n您的问题: ").strip()
-                if user_input.lower() in ['退出', 'quit', 'exit', '']:
+                question = input('\n您的问题: ').strip()
+                if question.lower() in {'quit', 'exit', '退出'}:
                     break
-                
-                # 询问是否使用流式输出
-                stream_choice = input("是否使用流式输出? (y/n, 默认y): ").strip().lower()
-                use_stream = stream_choice != 'n'
-
-                print("\n回答:")
-                if use_stream:
-                    # 流式输出
-                    for chunk in self.ask_question(user_input, stream=True):
-                        print(chunk, end="", flush=True)
-                    print("\n")
-                else:
-                    # 普通输出
-                    answer = self.ask_question(user_input, stream=False)
-                    print(f"{answer}\n")
-                
+                if not question:
+                    continue
+                if question.lower() == 'stats':
+                    print(json.dumps(self.statistics(), ensure_ascii=False, indent=2))
+                    continue
+                answer, _ = self.ask_question_with_routing(question, stream=True, explain_routing=True)
+                print_answer(answer)
             except KeyboardInterrupt:
                 break
-            except Exception as e:
-                print(f"处理问题时出错: {e}")
-        
-        print("\n感谢使用尝尝咸淡RAG系统！")
+            except Exception:
+                logger.exception('问答失败')
+
+    def close(self):
+        if self.index_module:
+            self.index_module.close()
+        if self.data_module:
+            self.data_module.close()
+
+
+AdvancedGraphRAGSystem = RecipeRAGSystem
+
+
+def print_answer(answer):
+    if isinstance(answer, str):
+        print(answer)
+    else:
+        for part in answer:
+            print(part, end='', flush=True)
+        print()
 
 
 def main():
-    """主函数"""
+    parser = argparse.ArgumentParser(description='Neo4j + Qdrant 食谱 Graph RAG')
+    parser.add_argument('--check', action='store_true', help='只验证数据库和模型连接')
+    parser.add_argument('--build-only', action='store_true')
+    parser.add_argument('--import-local', action='store_true', help='更新项目管理的本地食谱节点')
+    parser.add_argument('--rebuild', action='store_true', help='重新向量化当前版本，不删除其他集合')
+    parser.add_argument('--question')
+    parser.add_argument('--retrieve-only', action='store_true', help='只显示检索内容，不调用生成模型')
+    parser.add_argument('--no-stream', action='store_true')
+    parser.add_argument('--strategy', default='auto', choices=['auto', 'hybrid_traditional', 'graph_rag', 'combined'])
+    args = parser.parse_args()
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
+    logging.getLogger('httpx').setLevel(logging.WARNING)
+    system = RecipeRAGSystem()
     try:
-        # 创建RAG系统
-        rag_system = RecipeRAGSystem()
-        
-        # 运行交互式问答
-        rag_system.run_interactive()
-        
-    except Exception as e:
-        logger.error(f"系统运行出错: {e}")
-        print(f"系统错误: {e}")
+        system.initialize_system()
+        if args.check:
+            vector = system.index_module.embeddings.embed_query('食谱连接检查')
+            reply = system.generation_module.llm.invoke('请只回复：连接正常')
+            print(f'Neo4j、Qdrant、嵌入和生成模型连接正常；向量维度={len(vector)}；生成={reply.content}')
+            print('Recipe 数量:', system.data_module.run('MATCH (r:Recipe) RETURN count(r) AS count')[0]['count'])
+            return
+        system.build_knowledge_base(args.import_local, args.rebuild)
+        if args.build_only:
+            print(json.dumps(system.statistics(), ensure_ascii=False, indent=2))
+        elif args.question and args.retrieve_only:
+            docs, analysis = system.retrieve(args.question, args.strategy)
+            print('检索策略:', analysis.recommended_strategy.value)
+            for doc in docs:
+                print(json.dumps(doc.metadata, ensure_ascii=False))
+                print(doc.page_content)
+        elif args.question:
+            answer, _ = system.ask_question_with_routing(args.question, not args.no_stream, True, args.strategy)
+            print_answer(answer)
+        else:
+            system.run_interactive()
+    finally:
+        system.close()
 
-if __name__ == "__main__":
+
+if __name__ == '__main__':
     main()

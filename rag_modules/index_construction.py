@@ -1,168 +1,92 @@
-"""
-索引构建模块
-"""
-
-import logging
+"""Qdrant persistence, deterministic IDs and versioned, non-destructive collections."""
+import hashlib
 import json
-from typing import List
+import logging
 from pathlib import Path
-
-from langchain_ollama import OllamaEmbeddings
-from langchain_community.vectorstores import FAISS
+from qdrant_client import QdrantClient, models
 from langchain_core.documents import Document
+from .model_clients import create_embeddings
 
 logger = logging.getLogger(__name__)
 
-class IndexConstructionModule:
-    """索引构建模块 - 负责向量化和索引构建"""
 
-    def __init__(self, model_name: str = "qwen3-embedding:8b", index_save_path: str = "./vector_index",
-                 base_url: str = "http://localhost:11434", num_ctx: int = 4096, batch_size: int = 8):
-        """
-        初始化索引构建模块
+class QdrantIndexConstructionModule:
+    def __init__(self, config, embeddings=None, client=None):
+        self.config = config
+        self.embeddings = embeddings or create_embeddings(config)
+        self.client = client or QdrantClient(url=config.qdrant_url, api_key=config.qdrant_api_key or None,
+                                            timeout=120, check_compatibility=False)
+        self.collection_name = None
+        self.vectorstore = self
 
-        Args:
-            model_name: 嵌入模型名称
-            index_save_path: 索引保存路径
-            base_url: Ollama服务地址（不包含 /v1）
-            num_ctx: 嵌入模型上下文大小，独立于生成模型
-            batch_size: 每次嵌入的文本块数量
-        """
-        self.model_name = model_name
-        self.index_save_path = index_save_path
-        self.base_url = base_url
-        if batch_size < 1 or num_ctx < 1:
-            raise ValueError("embedding_batch_size 和 embedding_num_ctx 必须大于0")
-        self.num_ctx = num_ctx
-        self.batch_size = batch_size
-        self.embeddings = None
-        self.vectorstore = None
-        self.setup_embeddings()
-    
-    def setup_embeddings(self):
-        """初始化嵌入模型"""
-        logger.info(f"正在初始化嵌入模型: {self.model_name}")
-        
-        self.embeddings = OllamaEmbeddings(
-            model=self.model_name,
-            base_url=self.base_url,
-            num_ctx=self.num_ctx,
-        )
-        
-        logger.info("嵌入模型初始化完成")
-    
-    def build_vector_index(self, chunks: List[Document]) -> FAISS:
-        """
-        构建向量索引
-        
-        Args:
-            chunks: 文档块列表
-            
-        Returns:
-            FAISS向量存储对象
-        """
-        logger.info("正在构建FAISS向量索引...")
-        
+    def prepare_collection(self, chunks):
+        identity = {'schema': 1, 'model': self.config.embedding_model,
+                    'provider': self.config.embedding_provider, 'url': self.config.embedding_base_url,
+                    'num_ctx': self.config.embedding_num_ctx,
+                    'chunks': [(d.page_content, d.metadata) for d in chunks]}
+        signature = hashlib.sha256(json.dumps(identity, ensure_ascii=False, sort_keys=True).encode()).hexdigest()[:20]
+        self.collection_name = f'{self.config.qdrant_collection_name}_{signature}'
+        self.manifest_path = Path(self.config.index_save_path) / f'{self.collection_name}.json'
+
+    def load_index(self, chunks):
+        self.prepare_collection(chunks)
+        if not self.client.collection_exists(self.collection_name) or not self.manifest_path.exists():
+            return None
+        manifest = json.loads(self.manifest_path.read_text(encoding='utf-8'))
+        count = self.client.count(self.collection_name, exact=True).count
+        if manifest.get('count') == count == len(chunks):
+            logger.info('复用 Qdrant 集合 %s (%s chunks)', self.collection_name, count)
+            return self
+        return None
+
+    def build_vector_index(self, chunks):
         if not chunks:
-            raise ValueError("文档块列表不能为空")
-        
-        # 逐批向量化，避免一次将整个知识库提交给Ollama模型进程。
-        vectorstore = None
-        for start in range(0, len(chunks), self.batch_size):     #按 0、8、16……这样的起点遍历文本块
-            batch = chunks[start:start + self.batch_size]        #切出当前批次，最多 8 个文本块
-            if vectorstore is None:
-                vectorstore = FAISS.from_documents(documents=batch, embedding=self.embeddings)     #第一批用于创建索引
-            else:
-                vectorstore.add_documents(batch)                 #后续批次计算向量后追加到同一个索引
-            if start == 0 or (start // self.batch_size + 1) % 10 == 0 or start + len(batch) == len(chunks):
-                logger.info(f"向量化进度: {start + len(batch)}/{len(chunks)}")
-        self.vectorstore = vectorstore
-        
-        logger.info(f"向量索引构建完成，包含 {len(chunks)} 个向量")
-        return self.vectorstore
-    
-    def add_documents(self, new_chunks: List[Document]):
-        """
-        向现有索引添加新文档
-        
-        Args:
-            new_chunks: 新的文档块列表
-        """
-        if not self.vectorstore:
-            raise ValueError("请先构建向量索引")
-        
-        logger.info(f"正在添加 {len(new_chunks)} 个新文档到索引...")
-        for start in range(0, len(new_chunks), self.batch_size):
-            self.vectorstore.add_documents(new_chunks[start:start + self.batch_size])
-        logger.info("新文档添加完成")
+            raise ValueError('文档块列表不能为空')
+        self.prepare_collection(chunks)
+        for start in range(0, len(chunks), self.config.embedding_batch_size):
+            batch = chunks[start:start + self.config.embedding_batch_size]
+            vectors = self.embeddings.embed_documents([d.page_content for d in batch])
+            if len(vectors) != len(batch) or not vectors or not vectors[0]:
+                raise ValueError('嵌入接口返回数量或维度无效')
+            dimension = len(vectors[0])
+            if not self.client.collection_exists(self.collection_name):
+                self.client.create_collection(self.collection_name,
+                    vectors_config=models.VectorParams(size=dimension, distance=models.Distance.COSINE))
+            info = self.client.get_collection(self.collection_name)
+            if info.config.params.vectors.size != dimension or any(len(v) != dimension for v in vectors):
+                raise ValueError('嵌入维度与 Qdrant 集合不一致')
+            points = [models.PointStruct(id=d.metadata['chunk_id'], vector=v,
+                       payload={'page_content': d.page_content, 'metadata': d.metadata})
+                      for d, v in zip(batch, vectors)]
+            self.client.upsert(self.collection_name, points=points, wait=True)
+            logger.info('向量化进度: %s/%s', start + len(batch), len(chunks))
+        self.manifest_path.parent.mkdir(parents=True, exist_ok=True)
+        if self.client.count(self.collection_name, exact=True).count != len(chunks):
+            raise ValueError('Qdrant 点数与分块数不一致，索引不能标记为完成')
+        temp = self.manifest_path.with_suffix('.tmp')
+        temp.write_text(json.dumps({'count': len(chunks)}), encoding='utf-8')
+        temp.replace(self.manifest_path)
+        return self
 
-    def save_index(self):
-        """
-        保存向量索引到配置的路径
-        """
-        if not self.vectorstore:
-            raise ValueError("请先构建向量索引")
+    def similarity_search(self, query, k=5, filters=None):
+        if not self.collection_name:
+            raise ValueError('请先构建或加载索引')
+        conditions = []
+        for key, value in (filters or {}).items():
+            match = models.MatchAny(any=value) if isinstance(value, list) else models.MatchValue(value=value)
+            conditions.append(models.FieldCondition(key=f'metadata.{key}', match=match))
+        response = self.client.query_points(collection_name=self.collection_name,
+            query=self.embeddings.embed_query(query), limit=k, with_payload=True,
+            query_filter=models.Filter(must=conditions) if conditions else None)
+        return [Document(page_content=p.payload['page_content'], metadata=dict(p.payload['metadata']))
+                for p in response.points]
 
-        # 确保保存目录存在
-        Path(self.index_save_path).mkdir(parents=True, exist_ok=True)
+    def get_collection_stats(self):
+        return {'collection': self.collection_name,
+                'row_count': self.client.count(self.collection_name, exact=True).count if self.collection_name else 0}
 
-        self.vectorstore.save_local(self.index_save_path)
-        metadata_path = Path(self.index_save_path) / "embedding_config.json"
-        metadata_path.write_text(
-            json.dumps(self._embedding_config(), ensure_ascii=False),
-            encoding="utf-8",
-        )
-        logger.info(f"向量索引已保存到: {self.index_save_path}")
-    
-    def load_index(self):
-        """
-        从配置的路径加载向量索引
+    def close(self):
+        self.client.close()
 
-        Returns:
-            加载的向量存储对象，如果加载失败返回None
-        """
-        if not self.embeddings:
-            self.setup_embeddings()
 
-        if not Path(self.index_save_path).exists():
-            logger.info(f"索引路径不存在: {self.index_save_path}，将构建新索引")
-            return None
-
-        try:
-            metadata_path = Path(self.index_save_path) / "embedding_config.json"
-            if not metadata_path.exists():
-                logger.info("旧索引缺少嵌入模型信息，将使用Ollama重建索引")
-                return None
-            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
-            if metadata != self._embedding_config():
-                logger.info("索引的嵌入模型或上下文配置与当前配置不一致，将重建索引")
-                return None
-            self.vectorstore = FAISS.load_local(
-                self.index_save_path,
-                self.embeddings,
-                allow_dangerous_deserialization=True
-            )
-            logger.info(f"向量索引已从 {self.index_save_path} 加载")
-            return self.vectorstore
-        except Exception as e:
-            logger.warning(f"加载向量索引失败: {e}，将构建新索引")
-            return None
-    
-    def _embedding_config(self):
-        return {"provider": "ollama", "model": self.model_name, "num_ctx": self.num_ctx}
-
-    def similarity_search(self, query: str, k: int = 5) -> List[Document]:
-        """
-        相似度搜索
-        
-        Args:
-            query: 查询文本
-            k: 返回结果数量
-            
-        Returns:
-            相似文档列表
-        """
-        if not self.vectorstore:
-            raise ValueError("请先构建或加载向量索引")
-        
-        return self.vectorstore.similarity_search(query, k=k)
+IndexConstructionModule = QdrantIndexConstructionModule

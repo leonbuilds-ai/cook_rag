@@ -7,6 +7,7 @@ from typing import List
 
 from langchain_core.prompts import ChatPromptTemplate, PromptTemplate
 from langchain_ollama import ChatOllama
+from .model_clients import create_llm
 from langchain_core.documents import Document
 from langchain_core.runnables import RunnablePassthrough
 from langchain_core.output_parsers import StrOutputParser
@@ -17,7 +18,7 @@ class GenerationIntegrationModule:
     """生成集成模块 - 负责LLM集成和回答生成"""
     
     def __init__(self, model_name: str = "qwen3.5:9b", temperature: float = 0.1, max_tokens: int = 2048,
-                 base_url: str = "http://localhost:11434", num_ctx: int = 16384):
+                 base_url: str = "http://localhost:11434", num_ctx: int = 16384, config=None):
         """
         初始化生成集成模块
         
@@ -33,6 +34,7 @@ class GenerationIntegrationModule:
         self.max_tokens = max_tokens
         self.base_url = base_url
         self.num_ctx = num_ctx
+        self.config = config
         self.llm = None
         self.setup_llm()
     
@@ -40,7 +42,7 @@ class GenerationIntegrationModule:
         """初始化大语言模型"""
         logger.info(f"正在初始化LLM: {self.model_name}")
 
-        self.llm = ChatOllama(
+        self.llm = create_llm(self.config) if self.config else ChatOllama(
             model=self.model_name,
             base_url=self.base_url,
             temperature=self.temperature,
@@ -72,7 +74,7 @@ class GenerationIntegrationModule:
 相关食谱信息:
 {context}
 
-请提供详细、实用的回答。如果信息不足，请诚实说明。
+请根据原文提供实用的回答，引用菜名或来源。不应把未记录的食材搭配或因果关系当成事实；信息不足请说明。
 
 回答:""")
 
@@ -123,6 +125,8 @@ class GenerationIntegrationModule:
 [仅在有实用技巧时包含。优先使用原文中的实用技巧，如果原文的"附加内容"与烹饪无关或为空，可以基于制作步骤总结关键要点，或者完全省略此部分]
 
 注意：
+- 优先遵守用户要求的回答长度和格式，并引用使用的菜名或来源
+- 只根据原文和明确的图关系证据回答；缺失的时间、用量、营养或因果信息请说明，不要编造
 - 根据实际内容灵活调整结构
 - 不要强行填充无关内容或重复制作步骤中的信息
 - 重点突出实用性和可操作性
@@ -297,7 +301,7 @@ class GenerationIntegrationModule:
 相关食谱信息:
 {context}
 
-请提供详细、实用的回答。如果信息不足，请诚实说明。
+请根据原文提供实用的回答，引用菜名或来源。不应把未记录的食材搭配或因果关系当成事实；信息不足请说明。
 
 回答:""")
 
@@ -347,6 +351,8 @@ class GenerationIntegrationModule:
 [仅在有实用技巧时包含。优先使用原文中的实用技巧，如果原文的"附加内容"与烹饪无关或为空，可以基于制作步骤总结关键要点，或者完全省略此部分]
 
 注意：
+- 优先遵守用户要求的回答长度和格式，并引用使用的菜名或来源
+- 只根据原文和明确的图关系证据回答；缺失的时间、用量、营养或因果信息请说明，不要编造
 - 根据实际内容灵活调整结构
 - 不要强行填充无关内容或重复制作步骤中的信息
 - 重点突出实用性和可操作性
@@ -364,7 +370,7 @@ class GenerationIntegrationModule:
         for chunk in chain.stream(query):
             yield chunk
 
-    def _build_context(self, docs: List[Document], max_length: int = 2000) -> str:
+    def _build_context(self, docs: List[Document], max_length: int = None) -> str:
         """
         构建上下文字符串
         
@@ -377,6 +383,7 @@ class GenerationIntegrationModule:
         """
         if not docs:
             return "暂无相关食谱信息。"
+        max_length = max_length or (self.config.context_max_chars if self.config else 18000)
         
         context_parts = []
         current_length = 0
@@ -390,12 +397,19 @@ class GenerationIntegrationModule:
                 metadata_info += f" | 分类: {doc.metadata['category']}"
             if 'difficulty' in doc.metadata:
                 metadata_info += f" | 难度: {doc.metadata['difficulty']}"
+            metadata_info += f" | 来源: {doc.metadata.get('source', '未知')}"
             
             # 构建文档文本
             doc_text = f"{metadata_info}\n{doc.page_content}\n"
+            evidence = doc.metadata.get('graph_evidence', [])
+            if evidence:
+                doc_text += '\n图关系证据:\n' + '\n'.join(evidence) + '\n'
             
             # 检查长度限制
             if current_length + len(doc_text) > max_length:
+                remaining = max_length - current_length
+                if remaining > len(metadata_info) + 50:
+                    context_parts.append(doc_text[:remaining] + '\n[原文因上下文预算截断]')
                 break
             
             context_parts.append(doc_text)

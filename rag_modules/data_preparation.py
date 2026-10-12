@@ -8,7 +8,7 @@ import re
 from pathlib import Path
 from typing import List, Dict, Any
 
-from langchain_text_splitters import MarkdownHeaderTextSplitter
+from langchain_text_splitters import MarkdownHeaderTextSplitter, RecursiveCharacterTextSplitter
 from langchain_core.documents import Document
 import uuid
 
@@ -26,7 +26,8 @@ class DataPreparationModule:
         'staple': '主食',
         'aquatic': '水产',
         'condiment': '调料',
-        'drink': '饮品'
+        'drink': '饮品',
+        'semi-finished': '半成品'
     }
     CATEGORY_LABELS = list(set(CATEGORY_MAPPING.values()))
     DIFFICULTY_LABELS = ['非常简单', '简单', '中等', '困难', '非常困难']
@@ -56,7 +57,9 @@ class DataPreparationModule:
         documents = []
         data_path_obj = Path(self.data_path)
 
-        for md_file in data_path_obj.rglob("*.md"):  #递归搜索
+        for md_file in sorted(data_path_obj.rglob("*.md")):
+            if 'template' in md_file.relative_to(data_path_obj).parts:
+                continue
             try:
                 # 直接读取文件内容，保持Markdown格式
                 with open(md_file, 'r', encoding='utf-8') as f:
@@ -132,7 +135,7 @@ class DataPreparationModule:
         """对外提供支持的难度标签列表"""
         return cls.DIFFICULTY_LABELS
     
-    def chunk_documents(self) -> List[Document]:
+    def chunk_documents(self, chunk_size=1000, chunk_overlap=100) -> List[Document]:
         """
         Markdown结构感知分块
 
@@ -146,12 +149,17 @@ class DataPreparationModule:
 
         # 使用Markdown标题分割器
         chunks = self._markdown_header_split()
+        splitter = RecursiveCharacterTextSplitter(chunk_size=chunk_size, chunk_overlap=chunk_overlap,
+                                                   separators=['\n\n', '\n', '。', ' ', ''])
+        chunks = splitter.split_documents(chunks)
+        self.parent_child_map.clear()
 
         # 为每个chunk添加基础元数据
         for i, chunk in enumerate(chunks):
-            if 'chunk_id' not in chunk.metadata:
-                # 如果没有chunk_id（比如分割失败的情况），则生成一个
-                chunk.metadata['chunk_id'] = str(uuid.uuid4())
+            chunk.metadata['chunk_id'] = str(uuid.uuid5(uuid.NAMESPACE_URL,
+                f"{chunk.metadata['parent_id']}:{i}:{chunk.page_content}"))
+            chunk.metadata['doc_type'] = 'child'
+            self.parent_child_map[chunk.metadata['chunk_id']] = chunk.metadata['parent_id']
             chunk.metadata['batch_index'] = i  # 在当前批次中的索引
             chunk.metadata['chunk_size'] = len(chunk.page_content)
 
