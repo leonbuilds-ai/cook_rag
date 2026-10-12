@@ -1,0 +1,12 @@
+.env
+.env.*
+!.env.example
+.git
+.venv
+.upstream-c9
+__pycache__
+**/__pycache__
+logs
+vector_index
+.idea
+.vscode

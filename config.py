@@ -14,7 +14,7 @@ def env(name, default=''):
 
 @dataclass
 class RAGConfig:
-    data_path: str = str(ROOT / 'data/C8/cook')
+    data_path: str = str(ROOT / 'data/cook')
     index_save_path: str = str(ROOT / 'vector_index')
     embedding_model: str = field(default_factory=lambda: env('EMBED_MODEL_NAME', 'qwen3-embedding:8b'))
     embedding_provider: str = field(default_factory=lambda: env('EMBED_MODEL_TYPE', 'ollama').lower())
@@ -49,6 +49,8 @@ class RAGConfig:
     context_max_chars: int = 18000
     conversation_max_turns: int = 6
     conversation_max_chars: int = 6000
+    retrieval_mode: str = 'recipe'
+    source_base_url: str = 'https://github.com/leonbuilds-ai/cook_rag/blob/main/'
 
     def __post_init__(self):
         if self.embedding_provider not in {'openai', 'ollama'} or self.llm_provider not in {'openai', 'ollama'}:
@@ -59,6 +61,8 @@ class RAGConfig:
             raise ValueError('max_graph_depth 必须在 1 到 3 之间')
         if self.conversation_max_turns < 1 or self.conversation_max_chars < 500:
             raise ValueError('会话记忆至少保留 1 轮，字符预算至少为 500')
+        if self.retrieval_mode not in {'recipe', 'baseline'}:
+            raise ValueError('retrieval_mode 必须为 recipe 或 baseline')
 
     @classmethod
     def from_dict(cls, config_dict):
@@ -72,4 +76,39 @@ class RAGConfig:
 
 
 GraphRAGConfig = RAGConfig
-DEFAULT_CONFIG = RAGConfig()
+def load_config(path=None):
+    """TOML holds non-secret tuning values; existing model/database env vars win."""
+    import tomllib
+    from dataclasses import fields
+    path = Path(path or env('RAG_CONFIG', str(ROOT / 'settings.toml')))
+    values = tomllib.loads(path.read_text(encoding='utf-8')).get('rag', {}) if path.exists() else {}
+    allowed = {f.name for f in fields(RAGConfig)}
+    if set(values) - allowed:
+        raise ValueError(f'未知配置字段: {sorted(set(values) - allowed)}')
+    secret_names = {'embedding_api_key', 'llm_api_key', 'qdrant_api_key', 'neo4j_password'}
+    if set(values) & secret_names:
+        raise ValueError('密钥请放在 .env 或环境变量中')
+    defaults = RAGConfig()
+    # Fields backed by env factories use those values when explicitly set in the environment.
+    env_fields = {'embedding_model': 'EMBED_MODEL_NAME', 'embedding_provider': 'EMBED_MODEL_TYPE',
+        'embedding_base_url': 'EMBED_BASE_URL', 'llm_model': 'LLM_MODEL_ID',
+        'llm_provider': 'LLM_MODEL_TYPE', 'llm_base_url': 'LLM_BASE_URL',
+        'qdrant_url': 'QDRANT_URL', 'qdrant_collection_name': 'QDRANT_COLLECTION_NAME',
+        'neo4j_uri': 'NEO4J_URI', 'neo4j_user': 'NEO4J_USERNAME', 'neo4j_database': 'NEO4J_DATABASE',
+        'embedding_batch_size': 'EMBED_BATCH_SIZE', 'neo4j_connection_timeout': 'NEO4J_CONNECTION_TIMEOUT',
+        'neo4j_max_connection_pool_size': 'NEO4J_MAX_CONNECTION_POOL_SIZE',
+        'neo4j_max_connection_lifetime': 'NEO4J_MAX_CONNECTION_LIFETIME'}
+    for name, variable in env_fields.items():
+        if variable in os.environ:
+            values.pop(name, None)
+    if 'NEO4J_USER' in os.environ:
+        values.pop('neo4j_user', None)
+    for name in ('data_path', 'index_save_path'):
+        if name in values:
+            values[name] = str((ROOT / values[name]).resolve())
+    if env('RETRIEVAL_MODE'):
+        values['retrieval_mode'] = env('RETRIEVAL_MODE')
+    return RAGConfig(**{**asdict(defaults), **values})
+
+
+DEFAULT_CONFIG = load_config()

@@ -1,0 +1,428 @@
+{
+  "created_at": "2026-10-12T13:30:59.116737+00:00",
+  "k": 5,
+  "dataset_sha256": "d65f3e7eb40518f959381ae060849751dd721862270f02cc6cb8aacf2cc64d5a",
+  "corpus_sha256": "5f956f6b7d41f1b201af641da4126c52fb0561500ece1db15c9d5bd4e9ae3344",
+  "recipes": 322,
+  "chunks": 1761,
+  "embedding_model": "qwen3-embedding:8b",
+  "collection": "recipe_c9_8da7122318236cc4e170",
+  "scope": "hybrid retriever only; no routing, history, filters or answer generation",
+  "summary": {
+    "all": {
+      "baseline": {
+        "queries": 12,
+        "recall_at_5": 1.0,
+        "mrr_at_5": 0.916667,
+        "latency_ms": 64.275833
+      },
+      "recipe": {
+        "queries": 12,
+        "recall_at_5": 1.0,
+        "mrr_at_5": 1.0,
+        "latency_ms": 56.115833
+      }
+    },
+    "dev": {
+      "baseline": {
+        "queries": 12,
+        "recall_at_5": 1.0,
+        "mrr_at_5": 0.916667,
+        "latency_ms": 64.275833
+      },
+      "recipe": {
+        "queries": 12,
+        "recall_at_5": 1.0,
+        "mrr_at_5": 1.0,
+        "latency_ms": 56.115833
+      }
+    }
+  },
+  "queries": [
+    {
+      "id": "d01",
+      "split": "dev",
+      "query": "番茄炒鸡蛋怎么做",
+      "relevant": [
+        "data/cook/vegetable_dish/西红柿炒鸡蛋.md"
+      ],
+      "baseline": {
+        "recall_at_5": 1.0,
+        "mrr_at_5": 0.5,
+        "retrieved": [
+          "data/cook/vegetable_dish/洋葱炒鸡蛋/洋葱炒鸡蛋.md",
+          "data/cook/vegetable_dish/西红柿炒鸡蛋.md",
+          "data/cook/vegetable_dish/西葫芦炒鸡蛋/西葫芦炒鸡蛋.md",
+          "data/cook/vegetable_dish/菠菜炒鸡蛋/菠菜炒鸡蛋.md",
+          "data/cook/vegetable_dish/包菜炒鸡蛋粉丝/包菜炒鸡蛋粉丝.md"
+        ],
+        "latency_ms": 53.81
+      },
+      "recipe": {
+        "recall_at_5": 1.0,
+        "mrr_at_5": 1.0,
+        "retrieved": [
+          "data/cook/vegetable_dish/西红柿炒鸡蛋.md",
+          "data/cook/vegetable_dish/西葫芦炒鸡蛋/西葫芦炒鸡蛋.md",
+          "data/cook/vegetable_dish/洋葱炒鸡蛋/洋葱炒鸡蛋.md",
+          "data/cook/vegetable_dish/西红柿豆腐汤羹/西红柿豆腐汤羹.md",
+          "data/cook/soup/西红柿鸡蛋汤.md"
+        ],
+        "latency_ms": 51.86
+      }
+    },
+    {
+      "id": "d02",
+      "split": "dev",
+      "query": "宫爆鸡丁的花生什么时候放",
+      "relevant": [
+        "data/cook/meat_dish/宫保鸡丁/宫保鸡丁.md"
+      ],
+      "baseline": {
+        "recall_at_5": 1.0,
+        "mrr_at_5": 0.5,
+        "retrieved": [
+          "data/cook/meat_dish/口水鸡/口水鸡.md",
+          "data/cook/meat_dish/宫保鸡丁/宫保鸡丁.md",
+          "data/cook/meat_dish/乡村啤酒鸭.md",
+          "data/cook/aquatic/葱烧海参/葱烧海参.md",
+          "data/cook/staple/凉粉/凉粉.md"
+        ],
+        "latency_ms": 51.51
+      },
+      "recipe": {
+        "recall_at_5": 1.0,
+        "mrr_at_5": 1.0,
+        "retrieved": [
+          "data/cook/meat_dish/宫保鸡丁/宫保鸡丁.md",
+          "data/cook/meat_dish/口水鸡/口水鸡.md",
+          "data/cook/staple/凉粉/凉粉.md",
+          "data/cook/staple/炒馍.md",
+          "data/cook/vegetable_dish/虎皮青椒/虎皮青椒.md"
+        ],
+        "latency_ms": 52.83
+      }
+    },
+    {
+      "id": "d03",
+      "split": "dev",
+      "query": "酸辣马铃薯丝怎么炒",
+      "relevant": [
+        "data/cook/vegetable_dish/酸辣土豆丝.md"
+      ],
+      "baseline": {
+        "recall_at_5": 1.0,
+        "mrr_at_5": 1.0,
+        "retrieved": [
+          "data/cook/vegetable_dish/酸辣土豆丝.md",
+          "data/cook/staple/酸辣蕨根粉.md",
+          "data/cook/staple/炒凉粉/炒凉粉.md",
+          "data/cook/semi-finished/炸薯条/炸薯条.md",
+          "data/cook/vegetable_dish/素炒豆角.md"
+        ],
+        "latency_ms": 63.6
+      },
+      "recipe": {
+        "recall_at_5": 1.0,
+        "mrr_at_5": 1.0,
+        "retrieved": [
+          "data/cook/vegetable_dish/酸辣土豆丝.md",
+          "data/cook/meat_dish/小米辣炒肉.md",
+          "data/cook/staple/炒凉粉/炒凉粉.md",
+          "data/cook/staple/炒馍.md",
+          "data/cook/meat_dish/青椒土豆炒肉/青椒土豆炒肉.md"
+        ],
+        "latency_ms": 51.42
+      }
+    },
+    {
+      "id": "d04",
+      "split": "dev",
+      "query": "葱油拌面的酱汁配比",
+      "relevant": [
+        "data/cook/staple/葱油拌面.md"
+      ],
+      "baseline": {
+        "recall_at_5": 1.0,
+        "mrr_at_5": 1.0,
+        "retrieved": [
+          "data/cook/staple/葱油拌面.md",
+          "data/cook/staple/麻油拌面.md",
+          "data/cook/condiment/葱油.md",
+          "data/cook/staple/老干妈拌面.md",
+          "data/cook/staple/酸辣蕨根粉.md"
+        ],
+        "latency_ms": 66.49
+      },
+      "recipe": {
+        "recall_at_5": 1.0,
+        "mrr_at_5": 1.0,
+        "retrieved": [
+          "data/cook/staple/葱油拌面.md",
+          "data/cook/condiment/葱油.md",
+          "data/cook/staple/麻油拌面.md",
+          "data/cook/staple/炸酱面.md",
+          "data/cook/staple/老干妈拌面.md"
+        ],
+        "latency_ms": 48.8
+      }
+    },
+    {
+      "id": "d05",
+      "split": "dev",
+      "query": "猪蹄和白芸豆炖奶白汤",
+      "relevant": [
+        "data/cook/meat_dish/老妈蹄花/老妈蹄花.md"
+      ],
+      "baseline": {
+        "recall_at_5": 1.0,
+        "mrr_at_5": 1.0,
+        "retrieved": [
+          "data/cook/meat_dish/老妈蹄花/老妈蹄花.md",
+          "data/cook/meat_dish/红烧猪蹄/红烧猪蹄.md",
+          "data/cook/soup/玉米排骨汤/玉米排骨汤.md",
+          "data/cook/aquatic/鲤鱼炖白菜/鲤鱼炖白菜.md",
+          "data/cook/soup/菌菇炖乳鸽/菌菇炖乳鸽.md"
+        ],
+        "latency_ms": 115.78
+      },
+      "recipe": {
+        "recall_at_5": 1.0,
+        "mrr_at_5": 1.0,
+        "retrieved": [
+          "data/cook/meat_dish/老妈蹄花/老妈蹄花.md",
+          "data/cook/meat_dish/红烧猪蹄/红烧猪蹄.md",
+          "data/cook/meat_dish/萝卜炖羊排.md",
+          "data/cook/soup/玉米排骨汤/玉米排骨汤.md",
+          "data/cook/soup/菌菇炖乳鸽/菌菇炖乳鸽.md"
+        ],
+        "latency_ms": 65.37
+      }
+    },
+    {
+      "id": "d06",
+      "split": "dev",
+      "query": "早上想吃用金枪鱼罐头做的三明治",
+      "relevant": [
+        "data/cook/breakfast/金枪鱼酱三明治.md"
+      ],
+      "baseline": {
+        "recall_at_5": 1.0,
+        "mrr_at_5": 1.0,
+        "retrieved": [
+          "data/cook/breakfast/金枪鱼酱三明治.md",
+          "data/cook/breakfast/鸡蛋三明治.md",
+          "data/cook/staple/扬州炒饭/扬州炒饭.md",
+          "data/cook/breakfast/吐司果酱.md",
+          "data/cook/soup/皮蛋瘦肉粥.md"
+        ],
+        "latency_ms": 59.6
+      },
+      "recipe": {
+        "recall_at_5": 1.0,
+        "mrr_at_5": 1.0,
+        "retrieved": [
+          "data/cook/breakfast/金枪鱼酱三明治.md",
+          "data/cook/breakfast/鸡蛋三明治.md",
+          "data/cook/staple/扬州炒饭/扬州炒饭.md",
+          "data/cook/soup/皮蛋瘦肉粥.md",
+          "data/cook/breakfast/吐司果酱.md"
+        ],
+        "latency_ms": 50.98
+      }
+    },
+    {
+      "id": "d07",
+      "split": "dev",
+      "query": "可乐鸡翅的用量和步骤",
+      "relevant": [
+        "data/cook/meat_dish/可乐鸡翅.md"
+      ],
+      "baseline": {
+        "recall_at_5": 1.0,
+        "mrr_at_5": 1.0,
+        "retrieved": [
+          "data/cook/meat_dish/可乐鸡翅.md",
+          "data/cook/meat_dish/烤鸡翅.md",
+          "data/cook/semi-finished/空气炸锅鸡翅中/空气炸锅鸡翅中.md",
+          "data/cook/drink/可乐桶.md",
+          "data/cook/meat_dish/甜辣烤全翅.md"
+        ],
+        "latency_ms": 58.04
+      },
+      "recipe": {
+        "recall_at_5": 1.0,
+        "mrr_at_5": 1.0,
+        "retrieved": [
+          "data/cook/meat_dish/可乐鸡翅.md",
+          "data/cook/semi-finished/空气炸锅鸡翅中/空气炸锅鸡翅中.md",
+          "data/cook/meat_dish/烤鸡翅.md",
+          "data/cook/drink/可乐桶.md",
+          "data/cook/meat_dish/甜辣烤全翅.md"
+        ],
+        "latency_ms": 56.66
+      }
+    },
+    {
+      "id": "d08",
+      "split": "dev",
+      "query": "剩米饭加鸡蛋炒一下",
+      "relevant": [
+        "data/cook/staple/蛋炒饭.md",
+        "data/cook/staple/扬州炒饭/扬州炒饭.md"
+      ],
+      "baseline": {
+        "recall_at_5": 1.0,
+        "mrr_at_5": 1.0,
+        "retrieved": [
+          "data/cook/staple/蛋炒饭.md",
+          "data/cook/staple/扬州炒饭/扬州炒饭.md",
+          "data/cook/staple/日式咖喱饭/日式咖喱饭.md",
+          "data/cook/staple/肉蛋盖饭.md",
+          "data/cook/staple/日式肥牛丼饭/日式肥牛丼饭.md"
+        ],
+        "latency_ms": 56.44
+      },
+      "recipe": {
+        "recall_at_5": 1.0,
+        "mrr_at_5": 1.0,
+        "retrieved": [
+          "data/cook/staple/蛋炒饭.md",
+          "data/cook/staple/扬州炒饭/扬州炒饭.md",
+          "data/cook/staple/韩式拌饭/韩式拌饭.md",
+          "data/cook/staple/蛋包饭.md",
+          "data/cook/staple/肉蛋盖饭.md"
+        ],
+        "latency_ms": 51.9
+      }
+    },
+    {
+      "id": "d09",
+      "split": "dev",
+      "query": "乌梅山楂甘草熬的消暑饮品",
+      "relevant": [
+        "data/cook/drink/酸梅汤/酸梅汤.md"
+      ],
+      "baseline": {
+        "recall_at_5": 1.0,
+        "mrr_at_5": 1.0,
+        "retrieved": [
+          "data/cook/drink/酸梅汤/酸梅汤.md",
+          "data/cook/drink/冰粉/冰粉.md",
+          "data/cook/drink/酸梅汤（半成品加工）.md",
+          "data/cook/vegetable_dish/陕北熬豆角.md",
+          "data/cook/breakfast/金枪鱼酱三明治.md"
+        ],
+        "latency_ms": 57.31
+      },
+      "recipe": {
+        "recall_at_5": 1.0,
+        "mrr_at_5": 1.0,
+        "retrieved": [
+          "data/cook/drink/酸梅汤/酸梅汤.md",
+          "data/cook/drink/冬瓜茶.md",
+          "data/cook/drink/冰粉/冰粉.md",
+          "data/cook/drink/酸梅汤（半成品加工）.md",
+          "data/cook/vegetable_dish/陕北熬豆角.md"
+        ],
+        "latency_ms": 48.73
+      }
+    },
+    {
+      "id": "d10",
+      "split": "dev",
+      "query": "玉米排骨汤炖多久",
+      "relevant": [
+        "data/cook/soup/玉米排骨汤/玉米排骨汤.md"
+      ],
+      "baseline": {
+        "recall_at_5": 1.0,
+        "mrr_at_5": 1.0,
+        "retrieved": [
+          "data/cook/soup/玉米排骨汤/玉米排骨汤.md",
+          "data/cook/soup/陈皮排骨汤/陈皮排骨汤.md",
+          "data/cook/soup/陈皮排骨汤.md",
+          "data/cook/meat_dish/萝卜炖羊排.md",
+          "data/cook/breakfast/水煮玉米.md"
+        ],
+        "latency_ms": 53.12
+      },
+      "recipe": {
+        "recall_at_5": 1.0,
+        "mrr_at_5": 1.0,
+        "retrieved": [
+          "data/cook/soup/玉米排骨汤/玉米排骨汤.md",
+          "data/cook/soup/陈皮排骨汤/陈皮排骨汤.md",
+          "data/cook/soup/陈皮排骨汤.md",
+          "data/cook/meat_dish/萝卜炖羊排.md",
+          "data/cook/breakfast/水煮玉米.md"
+        ],
+        "latency_ms": 41.02
+      }
+    },
+    {
+      "id": "d11",
+      "split": "dev",
+      "query": "清蒸南瓜怎么做",
+      "relevant": [
+        "data/cook/vegetable_dish/清蒸南瓜.md"
+      ],
+      "baseline": {
+        "recall_at_5": 1.0,
+        "mrr_at_5": 1.0,
+        "retrieved": [
+          "data/cook/vegetable_dish/清蒸南瓜.md",
+          "data/cook/aquatic/清蒸鲈鱼/清蒸鲈鱼.md",
+          "data/cook/aquatic/清蒸生蚝.md",
+          "data/cook/meat_dish/清蒸鳜鱼/清蒸鳜鱼.md",
+          "data/cook/meat_dish/粉蒸肉.md"
+        ],
+        "latency_ms": 75.19
+      },
+      "recipe": {
+        "recall_at_5": 1.0,
+        "mrr_at_5": 1.0,
+        "retrieved": [
+          "data/cook/vegetable_dish/清蒸南瓜.md",
+          "data/cook/aquatic/清蒸鲈鱼/清蒸鲈鱼.md",
+          "data/cook/aquatic/清蒸生蚝.md",
+          "data/cook/meat_dish/清蒸鳜鱼/清蒸鳜鱼.md",
+          "data/cook/meat_dish/粉蒸肉.md"
+        ],
+        "latency_ms": 86.29
+      }
+    },
+    {
+      "id": "d12",
+      "split": "dev",
+      "query": "西红柿鸡蛋挂面怎么做",
+      "relevant": [
+        "data/cook/staple/西红柿鸡蛋挂面/西红柿鸡蛋挂面.md"
+      ],
+      "baseline": {
+        "recall_at_5": 1.0,
+        "mrr_at_5": 1.0,
+        "retrieved": [
+          "data/cook/staple/西红柿鸡蛋挂面/西红柿鸡蛋挂面.md",
+          "data/cook/soup/西红柿鸡蛋汤.md",
+          "data/cook/vegetable_dish/西红柿炒鸡蛋.md",
+          "data/cook/vegetable_dish/西红柿豆腐汤羹/西红柿豆腐汤羹.md",
+          "data/cook/vegetable_dish/西葫芦炒鸡蛋/西葫芦炒鸡蛋.md"
+        ],
+        "latency_ms": 60.42
+      },
+      "recipe": {
+        "recall_at_5": 1.0,
+        "mrr_at_5": 1.0,
+        "retrieved": [
+          "data/cook/staple/西红柿鸡蛋挂面/西红柿鸡蛋挂面.md",
+          "data/cook/vegetable_dish/西红柿炒鸡蛋.md",
+          "data/cook/soup/西红柿鸡蛋汤.md",
+          "data/cook/staple/河南蒸面条/河南蒸面条.md",
+          "data/cook/vegetable_dish/西红柿豆腐汤羹/西红柿豆腐汤羹.md"
+        ],
+        "latency_ms": 67.53
+      }
+    }
+  ]
+}

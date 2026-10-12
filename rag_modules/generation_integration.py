@@ -69,6 +69,7 @@ class GenerationIntegrationModule:
         history_text = self._format_history(history)
 
         prompt = ChatPromptTemplate.from_template("""
+涉及食谱事实的句子请引用对应的 [S1]、[S2] 等来源标记。只使用本轮给出的标记。
 你是一位专业的烹饪助手。请根据以下食谱信息回答用户的问题。
 
 以本轮解析的问题和食谱信息为准。用户引用旧推荐中的另一项时，切换到该项；
@@ -112,6 +113,7 @@ class GenerationIntegrationModule:
         history_text = self._format_history(history)
 
         prompt = ChatPromptTemplate.from_template("""
+涉及食谱事实的句子请引用对应的 [S1]、[S2] 等来源标记。只使用本轮给出的标记。
 你是一位专业的烹饪导师。请根据食谱信息，为用户提供详细的分步骤指导。
 
 以本轮解析的问题和食谱信息为准。用户引用旧推荐中的另一项时，切换到该项；
@@ -215,9 +217,9 @@ class GenerationIntegrationModule:
 
         # 记录重写结果
         if response != query:
-            logger.info(f"查询已重写: '{query}' → '{response}'")
+            logger.info('查询已重写')
         else:
-            logger.info(f"查询无需重写: '{query}'")
+            logger.info('查询无需重写')
 
         return response
 
@@ -316,6 +318,7 @@ class GenerationIntegrationModule:
         history_text = self._format_history(history)
 
         prompt = ChatPromptTemplate.from_template("""
+涉及食谱事实的句子请引用对应的 [S1]、[S2] 等来源标记。只使用本轮给出的标记。
 你是一位专业的烹饪助手。请根据以下食谱信息回答用户的问题。
 
 以本轮解析的问题和食谱信息为准。用户引用旧推荐中的另一项时，切换到该项；
@@ -358,6 +361,7 @@ class GenerationIntegrationModule:
         history_text = self._format_history(history)
 
         prompt = ChatPromptTemplate.from_template("""
+涉及食谱事实的句子请引用对应的 [S1]、[S2] 等来源标记。只使用本轮给出的标记。
 你是一位专业的烹饪导师。请根据食谱信息，为用户提供详细的分步骤指导。
 
 以本轮解析的问题和食谱信息为准。用户引用旧推荐中的另一项时，切换到该项；
@@ -432,7 +436,7 @@ class GenerationIntegrationModule:
         
         for i, doc in enumerate(docs, 1):
             # 添加元数据信息
-            metadata_info = f"【食谱 {i}】"
+            metadata_info = f"【食谱 {i}】[S{i}]"
             if 'dish_name' in doc.metadata:
                 metadata_info += f" {doc.metadata['dish_name']}"
             if 'category' in doc.metadata:

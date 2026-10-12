@@ -9,6 +9,7 @@ from langchain_core.documents import Document
 from rag_modules.conversation import ConversationMemory
 from rag_modules.dialogue_intent import direct_intent, is_recommendation
 from rag_modules.recipe_preferences import wants_light, light_evidence
+from rag_modules.sources import references, source_footer
 from rag_modules import (GraphDataPreparationModule, QdrantIndexConstructionModule,
     RetrievalOptimizationModule, GenerationIntegrationModule, GraphRAGRetrieval, IntelligentQueryRouter)
 
@@ -43,7 +44,8 @@ class RecipeRAGSystem:
         chunks = self.data_module.chunk_documents(self.config.chunk_size, self.config.chunk_overlap)
         if rebuild or self.index_module.load_index(chunks) is None:
             self.index_module.build_vector_index(chunks)
-        self.retrieval_module = RetrievalOptimizationModule(self.index_module, chunks)
+        self.retrieval_module = RetrievalOptimizationModule(self.index_module, chunks, docs,
+                                                             self.config.retrieval_mode)
         self.graph_rag_retrieval = GraphRAGRetrieval(self.config, self.data_module)
         self.query_router = IntelligentQueryRouter(self.retrieval_module, self.graph_rag_retrieval, self.config)
         self.system_ready = True
@@ -104,13 +106,18 @@ class RecipeRAGSystem:
                     if preference_evidence.get(d.metadata['parent_id'])]
         return docs, analysis
 
-    def ask_question_with_routing(self, question, stream=False, explain_routing=False, strategy='auto'):
+    def ask_question_with_routing(self, question, stream=False, explain_routing=False, strategy='auto',
+                                  memory=None, result_info=None):
+        memory = memory if memory is not None else self.conversation
+        info = result_info if result_info is not None else {}
+        info.update(sources=[], resolved_query=question, kind='answer')
         if not self.system_ready:
             raise ValueError('请先初始化系统并构建知识库')
         if not question.strip():
             raise ValueError('问题不能为空')
         intent = direct_intent(question)
         if intent:
+            info['kind'] = intent
             # Social messages leave recipe focus and recommendation anchors intact.
             replies = {
                 'greeting': '你好！我是食谱助手，可以帮你推荐菜品、查询做法和食材。你今天想吃什么？',
@@ -124,11 +131,13 @@ class RecipeRAGSystem:
                         '、'.join(f'{name}（{count}份）' for name, count in sorted(categories.items())) +
                         '。可以指定分类或食材，让我推荐几道菜。'), None
             return replies[intent], None
-        resolution = self.conversation.resolve(question,
+        resolution = memory.resolve(question,
             [d.metadata['dish_name'] for d in self.data_module.documents], self.generation_module.llm)
         if resolution.clarification:
+            info['kind'] = 'clarification'
             return resolution.clarification, None
-        history = self.conversation.messages() if resolution.uses_history else []
+        info['resolved_query'] = resolution.query
+        history = memory.messages() if resolution.uses_history else []
         if explain_routing and resolution.query != question:
             preview = ' '.join(resolution.query.split())
             print(f'追问解析: {preview[:160]}' + ('…' if len(preview) > 160 else ''))
@@ -136,12 +145,18 @@ class RecipeRAGSystem:
         if explain_routing:
             print(f'检索策略: {analysis.recommended_strategy.value}；{analysis.reasoning}')
         if not docs:
+            info['kind'] = 'no_results'
             return '没有找到符合条件的食谱，请调整菜品、食材或过滤条件。', analysis
+        sources = references(docs, self.config.source_base_url)
         if is_recommendation(resolution.query):
             # Recommend actual retrieved recipes once; details are fetched when a dish is selected.
             answer = self.generation_module.generate_list_answer(resolution.query, docs)
-            self.conversation.remember(question, answer, docs)
-            return answer, analysis
+            sources = [s for s in sources if s['title'] in answer]
+            sources = [{**s, 'id': f'S{i}'} for i, s in enumerate(sources, 1)]
+            info.update(sources=sources, kind='recommendation')
+            memory.remember(question, answer, docs)
+            return answer + source_footer(sources), analysis
+        info['sources'] = sources
         if any(word in resolution.query for word in ('怎么做', '步骤', '制作方法', '做法')):
             generate = (self.generation_module.generate_step_by_step_answer_stream if stream
                         else self.generation_module.generate_step_by_step_answer)
@@ -151,15 +166,16 @@ class RecipeRAGSystem:
         generation_query = question if resolution.query == question else f'用户原始提问：{question}\n已解析的追问：{resolution.query}'
         answer = generate(generation_query, docs, history=history)
         if not stream:
-            self.conversation.remember(question, answer, docs)
-            return answer, analysis
+            memory.remember(question, answer, docs)
+            return answer + source_footer(sources), analysis
         def remember_stream():
             parts = []
             # Commit only after normal exhaustion; interrupted/failed output is not a completed turn.
             for part in answer:
                 parts.append(part)
                 yield part
-            self.conversation.remember(question, ''.join(parts), docs)
+            memory.remember(question, ''.join(parts), docs)
+            yield source_footer(sources)
         return remember_stream(), analysis
 
     def clear_history(self):
@@ -193,8 +209,9 @@ class RecipeRAGSystem:
                 print_answer(answer)
             except (KeyboardInterrupt, EOFError):
                 break
-            except Exception:
-                logger.exception('问答失败')
+            except Exception as exc:
+                logger.error('问答失败', extra={'error_type': type(exc).__name__})
+                print('数据库或模型请求失败，请查看服务日志。')
 
     def close(self):
         if self.index_module:
@@ -226,11 +243,9 @@ def main():
     parser.add_argument('--no-stream', action='store_true')
     parser.add_argument('--strategy', default='auto', choices=['auto', 'hybrid_traditional', 'graph_rag', 'combined'])
     args = parser.parse_args()
-    # Use one flushed output stream so IDE stdout/stderr merging cannot reorder the prompt.
-    logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s',
-                        stream=sys.stdout, force=True)
-    logging.getLogger('httpx').setLevel(logging.WARNING)
-    logging.getLogger('jieba').setLevel(logging.WARNING)
+    from logging_config import configure_logging
+    from service_config import load_service_config
+    configure_logging(load_service_config())
     system = RecipeRAGSystem()
     try:
         print('正在连接 Neo4j 和 Qdrant…', flush=True)

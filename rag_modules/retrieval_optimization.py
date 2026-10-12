@@ -6,6 +6,7 @@ from rank_bm25 import BM25Okapi
 from langchain_core.documents import Document
 
 logger = logging.getLogger(__name__)
+jieba.setLogLevel(logging.WARNING)
 STOPWORDS = set('的 了 和 是 在 我 有 什么 怎么 如何 哪些 请 请问 想 要 需要 可以 吗 呢 做'.split())
 
 
@@ -43,12 +44,21 @@ def fuse(*rankings, top_k=5, k=60):
 
 
 class RetrievalOptimizationModule:
-    def __init__(self, vectorstore, chunks):
+    def __init__(self, vectorstore, chunks, parents=None, mode='baseline'):
         self.vectorstore = vectorstore
         self.chunks = chunks
         self.bm25 = BM25Okapi([tokenize(d.page_content) or ['_'] for d in chunks]) if chunks else None
+        self.mode = mode
+        self.parents = parents or []
+        self.parent_bm25 = BM25Okapi([tokenize(d.metadata.get('dish_name', '') + '\n' + d.page_content)
+                                     or ['_'] for d in self.parents]) if self.parents else None
 
     def hybrid_search(self, query, top_k=5, filters=None):
+        if self.mode == 'recipe' and self.parents:
+            return self.recipe_search(query, top_k, filters)
+        return self.baseline_search(query, top_k, filters)
+
+    def baseline_search(self, query, top_k=5, filters=None):
         candidates = max(top_k * 3, 15)
         vector_docs = self.vectorstore.similarity_search(query, k=candidates, filters=filters)
         bm25_docs = []
@@ -57,6 +67,33 @@ class RetrievalOptimizationModule:
             eligible = [i for i, d in enumerate(self.chunks) if matches(d, filters) and scores[i] > 0]
             bm25_docs = [self.chunks[i] for i in sorted(eligible, key=lambda i: scores[i], reverse=True)[:candidates]]
         return fuse(vector_docs, bm25_docs, top_k=top_k)
+
+    def recipe_search(self, query, top_k=5, filters=None):
+        """Fuse unique recipes, full-text BM25 and exact titles, without repeated chunks."""
+        expanded = query
+        for alias, canonical in [('番茄', '西红柿'), ('马铃薯', '土豆'), ('宫爆', '宫保')]:
+            expanded = expanded.replace(alias, canonical)
+        parents = {d.metadata['parent_id']: d for d in self.parents}
+        vector = self.vectorstore.similarity_search(expanded, k=max(top_k * 3, 45), filters=filters)
+        vector_parents, seen = [], set()
+        for doc in vector:
+            key = doc.metadata.get('parent_id')
+            if key in parents and key not in seen:
+                vector_parents.append(parents[key])
+                seen.add(key)
+        rankings = [vector_parents]
+        for index in (self.parent_bm25,):
+            scores = index.get_scores(tokenize(expanded))
+            eligible = [i for i, d in enumerate(self.parents) if matches(d, filters) and scores[i] > 0]
+            rankings.append([self.parents[i] for i in sorted(eligible, key=lambda i: scores[i],
+                                                            reverse=True)[:max(top_k * 3, 15)]])
+        # Generic title words such as 汤 must not overpower a specific ingredient query.
+        exact = [d for d in self.parents if matches(d, filters) and
+                 d.metadata.get('dish_name') and d.metadata['dish_name'] in expanded]
+        if exact:
+            exact.sort(key=lambda d: len(d.metadata['dish_name']), reverse=True)
+            rankings.append(exact)
+        return fuse(*rankings, top_k=top_k)
 
     def metadata_filtered_search(self, query, filters, top_k=5):
         return self.hybrid_search(query, top_k, filters)

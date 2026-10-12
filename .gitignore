@@ -24,6 +24,7 @@ dist/
 # Rebuildable vector index and logs
 vector_index/
 *.log
+logs/
 
 # OS files
 Thumbs.db

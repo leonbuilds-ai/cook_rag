@@ -1,0 +1,230 @@
+"""Single-process FastAPI service around the existing recipe engine."""
+import asyncio
+import logging
+import secrets
+import threading
+import time
+import uuid
+from collections import OrderedDict
+from contextlib import asynccontextmanager
+from typing import Literal
+from urllib.parse import urlparse
+
+import httpx
+from fastapi import FastAPI, Header, Request
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field, field_validator
+from config import DEFAULT_CONFIG
+from main import RecipeRAGSystem
+from rag_modules.conversation import ConversationMemory
+from service_config import load_service_config
+
+logger = logging.getLogger('cook_rag.api')
+
+
+class AskRequest(BaseModel):
+    question: str = Field(min_length=1, max_length=2000)
+    session_id: uuid.UUID | None = None
+    strategy: Literal['auto', 'hybrid_traditional', 'graph_rag', 'combined'] = 'auto'
+    reset: bool = False
+
+    @field_validator('question')
+    @classmethod
+    def meaningful_question(cls, value):
+        value = value.strip()
+        if not value:
+            raise ValueError('问题不能为空')
+        return value
+
+
+class Source(BaseModel):
+    id: str
+    title: str
+    document_id: str
+    path: str
+    url: str | None = None
+
+
+class AskResponse(BaseModel):
+    answer: str
+    sources: list[Source]
+    session_id: uuid.UUID
+    resolved_query: str
+    retrieval_strategy: str | None
+    kind: str
+    request_id: str
+    elapsed_ms: float
+
+
+class ServiceError(Exception):
+    def __init__(self, status, code, message):
+        self.status, self.code, self.message = status, code, message
+
+
+class Sessions:
+    """Bounded memory with TTL. Accessed only while the engine lock is held."""
+    def __init__(self, settings, rag_config):
+        self.settings, self.config = settings, rag_config
+        self.items = OrderedDict()
+
+    def get(self, session_id=None, reset=False):
+        now = time.monotonic()
+        expired = [key for key, (stamp, _) in self.items.items()
+                   if now - stamp >= self.settings.session_ttl_seconds]
+        for key in expired:
+            del self.items[key]
+        key = str(session_id) if session_id else str(uuid.uuid4())
+        existing = self.items.pop(key, None)
+        memory = existing[1] if existing and not reset else ConversationMemory(
+            self.config.conversation_max_turns, self.config.conversation_max_chars)
+        self.items[key] = (now, memory)
+        while len(self.items) > self.settings.max_sessions:
+            self.items.popitem(last=False)
+        return key, memory
+
+    def touch(self, key):
+        if key in self.items:
+            self.items[key] = (time.monotonic(), self.items[key][1])
+
+
+def check_dependencies(system):
+    checks = {}
+    def qdrant_probe():
+        with httpx.Client(timeout=3) as client:
+            response = client.get(system.config.qdrant_url.rstrip('/') + '/collections/' +
+                                  system.index_module.collection_name,
+                                  headers={'api-key': system.config.qdrant_api_key} if system.config.qdrant_api_key else {})
+            response.raise_for_status()
+    def neo4j_probe():
+        from neo4j import Query
+        with system.data_module.driver.session(database=system.config.neo4j_database) as session:
+            session.run(Query('RETURN 1 AS ok', timeout=3)).consume()
+    for name, probe in [('neo4j', neo4j_probe), ('qdrant', qdrant_probe)]:
+        try:
+            probe()
+            checks[name] = 'ok'
+        except Exception:
+            checks[name] = 'unavailable'
+    # Native local Ollama: check installed model names, without triggering inference.
+    for kind in ('embedding', 'llm'):
+        endpoint = getattr(system.config, f'{kind}_base_url')
+        parsed = urlparse(endpoint)
+        if parsed.hostname in {'localhost', '127.0.0.1', '::1'} and parsed.port == 11434:
+            try:
+                base = endpoint.rstrip('/').removesuffix('/v1')
+                with httpx.Client(timeout=3) as client:
+                    response = client.get(base + '/api/tags')
+                    response.raise_for_status()
+                models = {item['name'] for item in response.json()['models']}
+                checks[kind] = 'ok' if getattr(system.config, f'{kind}_model') in models else 'model_missing'
+            except Exception:
+                checks[kind] = 'unavailable'
+        else:
+            checks[kind] = 'configured'  # remote inference is verified by /ask, not a paid health probe
+    return checks
+
+
+def create_app(config=None, settings=None, system_factory=RecipeRAGSystem, dependency_probe=check_dependencies):
+    config = config or DEFAULT_CONFIG
+    settings = settings or load_service_config()
+
+    @asynccontextmanager
+    async def lifespan(app):
+        app.state.ready = False
+        system = None
+        try:
+            system = system_factory(config)
+            app.state.system = system
+            await asyncio.to_thread(system.initialize_system)
+            await asyncio.to_thread(system.build_knowledge_base)
+            app.state.ready = True
+            logger.info('Knowledge base ready')
+        except Exception as exc:
+            logger.error('Startup failed', extra={'error_type': type(exc).__name__})
+        try:
+            yield
+        finally:
+            app.state.ready = False
+            if system is not None:
+                await asyncio.to_thread(system.close)
+
+    app = FastAPI(title='Cook RAG', version='1.0.0', lifespan=lifespan)
+    app.state.ready = False
+    app.state.engine_lock = threading.Lock()
+    app.state.sessions = Sessions(settings, config)
+
+    @app.middleware('http')
+    async def request_context(request, call_next):
+        request.state.request_id = str(uuid.uuid4())
+        started = time.perf_counter()
+        try:
+            response = await call_next(request)
+        except Exception as exc:
+            logger.error('Unhandled request failure', extra={'request_id': request.state.request_id,
+                                                             'error_type': type(exc).__name__})
+            response = failure(request, 500, 'internal_error', '服务内部错误，请提供 request_id 排查。')
+        response.headers['X-Request-ID'] = request.state.request_id
+        logger.info('HTTP request', extra={'request_id': request.state.request_id,
+            'method': request.method, 'path': request.url.path, 'status': response.status_code,
+            'duration_ms': round((time.perf_counter() - started) * 1000, 2)})
+        return response
+
+    def failure(request, status, code, message):
+        return JSONResponse(status_code=status, content={'error': {'code': code, 'message': message},
+            'request_id': request.state.request_id}, headers={'Retry-After': '2'} if status == 429 else None)
+
+    @app.exception_handler(ServiceError)
+    async def service_error(request, exc):
+        return failure(request, exc.status, exc.code, exc.message)
+
+    @app.exception_handler(RequestValidationError)
+    async def invalid_request(request, exc):
+        # Pydantic error input can contain the full prompt: do not return or log it.
+        return failure(request, 422, 'invalid_request', '请检查 question、session_id 和 strategy。')
+
+    @app.get('/health')
+    def health():
+        if not app.state.ready:
+            return JSONResponse(status_code=503, content={'status': 'not_ready', 'dependencies': {}})
+        checks = dependency_probe(app.state.system)
+        ready = all(value in {'ok', 'configured'} for value in checks.values())
+        return JSONResponse(status_code=200 if ready else 503, content={
+            'status': 'ready' if ready else 'degraded', 'dependencies': checks,
+            'recipes': len(app.state.system.data_module.documents),
+            'retrieval_mode': config.retrieval_mode})
+
+    @app.post('/ask', response_model=AskResponse)
+    def ask(body: AskRequest, request: Request, authorization: str | None = Header(default=None)):
+        if settings.api_key and not secrets.compare_digest((authorization or '').encode('utf-8'),
+                                                          ('Bearer ' + settings.api_key).encode('utf-8')):
+            raise ServiceError(401, 'unauthorized', '需要有效的 Bearer API key。')
+        if not app.state.ready:
+            raise ServiceError(503, 'not_ready', '知识库未就绪，请检查 /health 和服务日志。')
+        started = time.perf_counter()
+        lock = app.state.engine_lock
+        if not lock.acquire(timeout=settings.queue_timeout_seconds):
+            raise ServiceError(429, 'busy', '服务正在处理其他问题，请稍后重试。')
+        try:
+            session_id, memory = app.state.sessions.get(body.session_id, body.reset)
+            info = {}
+            answer, analysis = app.state.system.ask_question_with_routing(
+                body.question, strategy=body.strategy, memory=memory, result_info=info)
+            app.state.sessions.touch(session_id)
+            return AskResponse(answer=answer, sources=info['sources'], session_id=session_id,
+                resolved_query=info['resolved_query'], kind=info['kind'],
+                retrieval_strategy=analysis.recommended_strategy.value if analysis else None,
+                request_id=request.state.request_id, elapsed_ms=round((time.perf_counter() - started) * 1000, 2))
+        except ServiceError:
+            raise
+        except Exception as exc:
+            logger.error('Backend request failed', extra={'request_id': request.state.request_id,
+                                                        'error_type': type(exc).__name__})
+            raise ServiceError(502, 'backend_error', '数据库或模型请求失败，请稍后重试。') from None
+        finally:
+            lock.release()
+
+    return app
+
+
+app = create_app()

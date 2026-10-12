@@ -1,0 +1,28 @@
+# Non-secret defaults. .env supplies database credentials and model endpoints.
+[rag]
+data_path = "data/cook"
+index_save_path = "vector_index"
+top_k = 5
+retrieval_mode = "recipe"
+chunk_size = 1000
+chunk_overlap = 100
+parent_doc_top_n = 3
+parent_doc_max_chars = 6000
+context_max_chars = 18000
+conversation_max_turns = 6
+conversation_max_chars = 6000
+temperature = 0.1
+max_tokens = 2048
+
+[service]
+host = "127.0.0.1"
+port = 8000
+max_sessions = 200
+session_ttl_seconds = 3600
+queue_timeout_seconds = 1
+
+[logging]
+level = "INFO"
+file = "logs/cook_rag.jsonl"
+max_bytes = 10485760
+backup_count = 3

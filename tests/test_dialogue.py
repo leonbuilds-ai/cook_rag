@@ -88,7 +88,10 @@ class DialogueTests(unittest.TestCase):
         self.assertLess(text.index('正在连接'), text.index('CONNECTED'))
         self.assertLess(text.index('CONNECTED'), text.index('正在加载'))
         self.assertLess(text.index('READY'), text.index('INPUT'))
-        self.assertIs(setup.call_args.kwargs['stream'], out)
+        handlers = setup.call_args.kwargs['handlers']
+        self.assertIs(handlers[1].stream, out)
+        for handler in handlers:
+            handler.close()
         self.assertTrue(setup.call_args.kwargs['force'])
         fake.close.assert_called_once()
 

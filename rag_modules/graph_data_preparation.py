@@ -4,6 +4,7 @@ import re
 from neo4j import GraphDatabase
 from langchain_core.documents import Document
 from .data_preparation import DataPreparationModule
+from .sources import canonical_source
 
 
 class GraphDataPreparationModule(DataPreparationModule):
@@ -62,7 +63,7 @@ class GraphDataPreparationModule(DataPreparationModule):
             documents.append(Document(page_content=content, metadata={
                 'parent_id': recipe_id, 'recipe_id': recipe_id, 'graph_element_id': record['eid'],
                 'dish_name': name, 'recipe_name': name, 'category': category,
-                'difficulty': difficulty, 'source': props.get('source', f'neo4j:{recipe_id}'),
+                'difficulty': difficulty, 'source': canonical_source(props.get('source', f'neo4j:{recipe_id}')),
                 'doc_type': 'parent'}))
         self.documents = documents
         return documents
@@ -107,7 +108,7 @@ class GraphDataPreparationModule(DataPreparationModule):
                 DELETE rel''', rid=rid, props={
                     'name': doc.metadata['dish_name'], 'content': doc.page_content,
                     'category': doc.metadata['category'], 'difficulty': doc.metadata['difficulty'],
-                    'source': doc.metadata['source']})
+                    'source': canonical_source(doc.metadata['source'])})
             category = doc.metadata['category']
             self.run('''MATCH (r:LocalRecipeC9 {nodeId:$rid})
                 MERGE (c:Category:LocalCategoryC9 {nodeId:$cid}) SET c.name=$category
