@@ -2,6 +2,8 @@
 
 启动：`python serve.py`。OpenAPI：`GET /openapi.json`，交互文档：`GET /docs`。
 
+日常使用访问网站首页 `GET /`；`/docs` 保留为开发者调试页。`/assets` 仅提供 web 目录的静态文件。
+
 ## POST /ask
 
 `Content-Type: application/json`。设置 `APP_API_KEY` 后，请求必须包含 `Authorization: Bearer <key>`。
@@ -33,6 +35,12 @@
 ```
 
 检查图数据库查询、当前 Qdrant 集合和本地 Ollama 的模型列表，不执行生成。远程模型服务标记为 `configured`，调用能力以 `/ask` 的实际结果为准。启动异常时返回 `not_ready`，依赖异常返回 `degraded`。启动期间 Uvicorn 等待 lifespan 完成，健康检查可能尚不能连接。
+
+另返回 `auth_required`、`instance_id` 和 `session_ttl_seconds`。网站用于显示访问设置、识别服务重启及清理已过期的对话；instance_id 只是进程标识，不是密钥。
+
+## GET /recipes/{document_id}
+
+返回当前知识库中该食谱的 `title`、完整 Markdown `content` 和 `source`。网站从 `/ask` 的 sources 获取 document_id，再调用此接口打开原文弹窗。不会接收或读取任意文件路径。开启 APP_API_KEY 后与 `/ask` 使用相同 Bearer 鉴权。找不到返回 404 `recipe_not_found`，知识库未就绪返回 503。
 
 ## 错误与并发
 

@@ -16,3 +16,7 @@ jobs:
       - run: python -m pip check
       - run: python -m unittest discover -s tests -q
       - run: python -m compileall -q api.py serve.py main.py config.py service_config.py logging_config.py evaluate.py rag_modules
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: node --check web/app.js

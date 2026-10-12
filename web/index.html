@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#fcfaf6">
+  <meta name="description" content="中文食谱助手，帮你安排一日三餐、查找做法和食材，支持连续追问与食谱原文查看。">
+  <title>好好吃饭 · 中文食谱助手</title>
+  <link rel="icon" href="/assets/icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/assets/style.css">
+  <script src="/assets/app.js" defer></script>
+</head>
+<body>
+<svg class="icon-defs" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><defs>
+  <symbol id="i-pot" viewBox="0 0 24 24"><path d="M5 10h14v6a5 5 0 0 1-5 5h-4a5 5 0 0 1-5-5v-6Zm-3 2h3m14 0h3M4 7h16M9 7V5h6v2M9 2v1m6-1v1"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+  <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1.5 1.5m11 11L19 19M5 19l1.5-1.5m11-11L19 5"/></symbol>
+  <symbol id="i-leaf" viewBox="0 0 24 24"><path d="M20 3c-12-1-17 5-14 12s14 3 14-12ZM4 21 16 9m-6 6v-5m4 1h5"/></symbol>
+  <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 6v6l4 2"/></symbol>
+  <symbol id="i-bowl" viewBox="0 0 24 24"><path d="M3 11h18a9 9 0 0 1-18 0Zm6 9v2h6v-2M8 3c-2 2 2 3 0 5m4-6c-2 2 2 3 0 5m4-4c-2 2 2 3 0 5"/></symbol>
+  <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M12 19V5m-6 6 6-6 6 6"/></symbol>
+  <symbol id="i-chevron" viewBox="0 0 24 24"><path d="m9 5 7 7-7 7"/></symbol>
+  <symbol id="i-book" viewBox="0 0 24 24"><path d="M12 5c-3-2-7-2-10-1v15c3-1 7-1 10 1 3-2 7-2 10-1V4c-3-1-7-1-10 1Zm0 0v15"/></symbol>
+  <symbol id="i-copy" viewBox="0 0 24 24"><rect x="8" y="8" width="12" height="13" rx="2"/><path d="M16 8V3H3v13h5"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></symbol>
+  <symbol id="i-menu" viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16"/></symbol>
+  <symbol id="i-close" viewBox="0 0 24 24"><path d="m6 6 12 12M6 18 18 6"/></symbol>
+  <symbol id="i-key" viewBox="0 0 24 24"><circle cx="8" cy="9" r="5"/><path d="m12 12 9 9m-5-5 3-3m-6 0 3-3"/></symbol>
+</defs></svg>
+<div class="app-shell">
+  <aside class="sidebar" id="sidebar" aria-label="导航与快捷提问">
+    <a class="brand" href="/" aria-label="好好吃饭首页"><span class="brand-icon"><svg><use href="#i-pot"/></svg></span><span><strong>好好吃饭</strong><small>把日子过成好味道</small></span></a>
+    <button class="new-chat" id="new-chat"><svg><use href="#i-plus"/></svg>开启新对话<span>＋</span></button>
+    <div class="nav-label">今天想吃点什么</div>
+    <nav class="quick-nav">
+      <button data-question="早餐吃什么"><svg><use href="#i-sun"/></svg>元气早餐<span>早</span></button>
+      <button data-question="晚餐我想吃得清淡点，有什么推荐"><svg><use href="#i-leaf"/></svg>清淡一点<span>轻</span></button>
+      <button data-question="推荐三道简单易做的主食"><svg><use href="#i-clock"/></svg>简单快手<span>简</span></button>
+      <button data-question="晚餐吃什么"><svg><use href="#i-bowl"/></svg>今晚吃好<span>暖</span></button>
+    </nav>
+    <section class="conversation-nav"><div class="nav-label">本次对话</div><button id="current-chat"><span class="chat-dot"></span><span id="chat-title">还没想好？一起选道菜</span></button></section>
+    <div class="sidebar-bottom"><div class="little-note"><svg><use href="#i-book"/></svg><strong>每一餐，都有出处</strong><p>回答附带食谱原文，<br>做法与用量随时可查。</p></div><button class="key-button" id="connection-settings" hidden><svg><use href="#i-key"/></svg>访问设置</button><span class="sidebar-caption">一日三餐，认真对待。</span></div>
+  </aside>
+  <button id="sidebar-shade" class="sidebar-shade" aria-label="关闭导航" hidden></button>
+  <main class="main-panel">
+    <header class="topbar"><div class="topbar-left"><button class="icon-button mobile-menu" id="menu-toggle" aria-label="打开导航"><svg><use href="#i-menu"/></svg></button><span>你的厨房小帮手</span><span class="header-separator">/</span><strong>食谱问答</strong></div><div class="service-status" id="service-status" role="status"><span></span>正在连接</div></header>
+    <div class="scroll-area" id="scroll-area">
+      <section class="welcome" id="welcome">
+        <div class="hero"><div class="hero-copy"><span class="eyebrow"><span></span>好好吃饭，好好生活</span><h1>把今天这顿饭，<br>安排得<span>刚刚好。</span></h1><p>冰箱里的食材、想吃的口味，或一道惦记的菜。<br>告诉我，我们一起把它变成餐桌上的好味道。</p><div class="hero-proof"><span><svg><use href="#i-book"/></svg><b id="recipe-count">食谱原文</b> 可查</span><i></i><span>推荐 · 做法 · 食材</span></div></div><div class="hero-art" aria-hidden="true"><svg viewBox="0 0 320 285"><ellipse cx="164" cy="247" rx="111" ry="16" fill="#e9dfce" opacity=".55"/><circle cx="168" cy="139" r="113" fill="#f2e8d5"/><path d="M80 171h179c-9 51-31 70-89 70s-84-24-90-70" fill="#d8a75e"/><path d="M81 171h178c-8 21-167 21-178 0" fill="#fae5ba"/><ellipse cx="170" cy="165" rx="100" ry="31" fill="#fefcf6"/><ellipse cx="170" cy="164" rx="85" ry="22" fill="#f2d4a0"/><path d="M109 162c9-17 28-26 50-19s41 5 61 10" stroke="#fff9df" stroke-width="9" fill="none" stroke-linecap="round"/><path d="M113 176c19-15 35-12 52-5s32 2 55-7" stroke="#fff9df" stroke-width="8" fill="none" stroke-linecap="round"/><g fill="#6a8956"><path d="M178 159c-4-30 6-44 24-52 10 24-2 45-24 52"/><path d="M181 150c16-21 33-24 49-17-4 22-23 28-49 17"/><path d="M177 151c-19-24-32-25-46-17 9 19 23 24 46 17"/></g><ellipse cx="142" cy="158" rx="20" ry="15" fill="#f8faf1" transform="rotate(-18 142 158)"/><ellipse cx="143" cy="158" rx="11" ry="9" fill="#e5ad4e"/><g fill="#c9704e"><ellipse cx="113" cy="172" rx="12" ry="6" transform="rotate(-12 113 172)"/><ellipse cx="220" cy="169" rx="13" ry="6" transform="rotate(18 220 169)"/></g><g fill="#759962"><circle cx="165" cy="179" r="3"/><circle cx="188" cy="176" r="3"/><circle cx="152" cy="174" r="3"/></g><path d="m231 103 54-66m-48 73 61-66" stroke="#806447" stroke-width="7" stroke-linecap="round"/><path d="M123 81c-12-16 14-22 3-39m36 36c-13-17 13-24 3-41" stroke="#c2b69e" stroke-width="3" fill="none" stroke-linecap="round"/><path d="M65 104c-13-2-21 3-22 16 13 4 23-2 22-16m17-16c-13-5-24-1-26 11 13 6 22 2 26-11" fill="#91a877"/><circle cx="247" cy="209" r="5" fill="#dfb672"/><circle cx="81" cy="75" r="4" fill="#dfb672"/></svg><div class="art-label">一碗热乎，满心踏实</div></div></div>
+        <div class="starter-heading"><h2>从一顿想吃的饭开始</h2><span>选个方向，或者直接问我</span></div>
+        <div class="starter-grid"><button class="starter-card" data-question="早餐吃什么"><span class="card-icon peach"><svg><use href="#i-sun"/></svg></span><strong>早餐，吃点好的</strong><p>给新的一天充个电</p><span class="card-link">帮我选早餐 <svg><use href="#i-chevron"/></svg></span></button><button class="starter-card" data-question="晚餐我想吃得清淡点，有什么推荐"><span class="card-icon green"><svg><use href="#i-leaf"/></svg></span><strong>今天想清淡一点</strong><p>找几道清爽的家常菜</p><span class="card-link">来点清淡的 <svg><use href="#i-chevron"/></svg></span></button><button class="starter-card" data-question="葱油拌面怎么做"><span class="card-icon sand"><svg><use href="#i-bowl"/></svg></span><strong>学一道拿手好菜</strong><p>从食材到步骤，慢慢来</p><span class="card-link">试试葱油拌面 <svg><use href="#i-chevron"/></svg></span></button></div>
+        <div class="welcome-tip"><svg><use href="#i-check"/></svg>可以接着问「第二个怎么做」，也可以告诉我你的口味偏好。</div>
+      </section>
+      <section class="messages" id="messages" aria-label="对话记录" aria-live="polite" aria-relevant="additions" hidden></section>
+    </div>
+    <footer class="composer-area"><form id="ask-form" class="composer"><label for="question" class="sr-only">输入你的做菜问题</label><textarea id="question" rows="1" maxlength="2000" placeholder="今天想吃什么？或告诉我冰箱里有什么食材…"></textarea><div class="composer-bottom"><span id="composer-hint"><svg><use href="#i-book"/></svg>好味道，从一个问题开始</span><button type="submit" id="send-button" aria-label="发送问题"><svg><use href="#i-arrow"/></svg></button></div></form><div class="footer-note"><span>食谱回答附原文 · 请按实际人数调整用量</span><span class="keyboard-tip">Enter 发送 · Shift + Enter 换行</span></div></footer>
+  </main>
+</div>
+<dialog id="recipe-dialog" class="recipe-dialog"><div class="dialog-heading"><div><span class="eyebrow">食谱原文</span><h2 id="recipe-title">正在读取…</h2></div><button class="icon-button" id="close-recipe" aria-label="关闭食谱"><svg><use href="#i-close"/></svg></button></div><div id="recipe-content" class="markdown recipe-content"></div><div class="recipe-dialog-footer"><span>以上为知识库中的原始食谱</span><a id="recipe-original" target="_blank" rel="noopener noreferrer" hidden>在 GitHub 查看原文 ↗</a></div></dialog>
+<dialog id="settings-dialog" class="settings-dialog"><div class="dialog-heading"><h2>访问设置</h2><button class="icon-button" id="close-settings" aria-label="关闭设置"><svg><use href="#i-close"/></svg></button></div><p>服务开启访问验证时，在这里填写管理员提供的访问密钥。仅保留在当前浏览器标签页中。</p><form id="settings-form"><label for="api-key">访问密钥</label><input id="api-key" type="password" autocomplete="off" placeholder="未开启验证时无需填写"><button class="primary-button" type="submit">保存并继续</button></form></dialog>
+<div class="toast" id="toast" role="status" hidden></div>
+</body>
+</html>

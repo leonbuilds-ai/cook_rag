@@ -5,6 +5,7 @@ import secrets
 import threading
 import time
 import uuid
+from pathlib import Path
 from collections import OrderedDict
 from contextlib import asynccontextmanager
 from typing import Literal
@@ -13,7 +14,8 @@ from urllib.parse import urlparse
 import httpx
 from fastapi import FastAPI, Header, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
 from config import DEFAULT_CONFIG
 from main import RecipeRAGSystem
@@ -151,8 +153,23 @@ def create_app(config=None, settings=None, system_factory=RecipeRAGSystem, depen
 
     app = FastAPI(title='Cook RAG', version='1.0.0', lifespan=lifespan)
     app.state.ready = False
+    app.state.instance_id = str(uuid.uuid4())
     app.state.engine_lock = threading.Lock()
     app.state.sessions = Sessions(settings, config)
+    web_root = Path(__file__).resolve().parent / 'web'
+    app.mount('/assets', StaticFiles(directory=web_root), name='assets')
+
+    @app.get('/', include_in_schema=False)
+    def website():
+        return FileResponse(web_root / 'index.html', headers={
+            'Cache-Control': 'no-cache', 'X-Content-Type-Options': 'nosniff',
+            'Referrer-Policy': 'same-origin',
+            'Content-Security-Policy': "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"})
+
+    def authenticate(authorization):
+        if settings.api_key and not secrets.compare_digest((authorization or '').encode('utf-8'),
+                                                          ('Bearer ' + settings.api_key).encode('utf-8')):
+            raise ServiceError(401, 'unauthorized', '需要有效的 Bearer API key。')
 
     @app.middleware('http')
     async def request_context(request, call_next):
@@ -192,13 +209,24 @@ def create_app(config=None, settings=None, system_factory=RecipeRAGSystem, depen
         return JSONResponse(status_code=200 if ready else 503, content={
             'status': 'ready' if ready else 'degraded', 'dependencies': checks,
             'recipes': len(app.state.system.data_module.documents),
-            'retrieval_mode': config.retrieval_mode})
+            'retrieval_mode': config.retrieval_mode, 'auth_required': bool(settings.api_key),
+            'instance_id': app.state.instance_id, 'session_ttl_seconds': settings.session_ttl_seconds})
+
+    @app.get('/recipes/{document_id}')
+    def recipe(document_id: str, authorization: str | None = Header(default=None)):
+        authenticate(authorization)
+        if not app.state.ready:
+            raise ServiceError(503, 'not_ready', '食谱暂时不可用，请稍后重试。')
+        from rag_modules.sources import references
+        for doc in app.state.system.data_module.documents:
+            if doc.metadata.get('parent_id') == document_id:
+                return {'title': doc.metadata.get('dish_name', '食谱'), 'content': doc.page_content,
+                        'source': references([doc], config.source_base_url)[0]}
+        raise ServiceError(404, 'recipe_not_found', '没有找到这份食谱。')
 
     @app.post('/ask', response_model=AskResponse)
     def ask(body: AskRequest, request: Request, authorization: str | None = Header(default=None)):
-        if settings.api_key and not secrets.compare_digest((authorization or '').encode('utf-8'),
-                                                          ('Bearer ' + settings.api_key).encode('utf-8')):
-            raise ServiceError(401, 'unauthorized', '需要有效的 Bearer API key。')
+        authenticate(authorization)
         if not app.state.ready:
             raise ServiceError(503, 'not_ready', '知识库未就绪，请检查 /health 和服务日志。')
         started = time.perf_counter()

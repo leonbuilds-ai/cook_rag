@@ -76,6 +76,27 @@ class ApiTests(unittest.TestCase):
             self.assertEqual(client.get('/health').status_code, 503)
             self.assertEqual(client.post('/ask', json={'question': '你好'}).status_code, 503)
 
+    def test_website_assets_and_local_recipe_reference(self):
+        self.system.data_module.documents = [Document(page_content='# 测试菜\n做法原文',
+            metadata={'parent_id': 'local-c9:test', 'dish_name': '测试菜', 'source': 'data/cook/test.md'})]
+        with TestClient(self.app) as client:
+            page = client.get('/')
+            self.assertEqual(page.status_code, 200)
+            self.assertIn('好好吃饭', page.text)
+            self.assertEqual(client.get('/assets/app.js').status_code, 200)
+            result = client.get('/recipes/local-c9:test')
+            self.assertEqual(result.status_code, 200)
+            self.assertEqual(result.json()['content'], '# 测试菜\n做法原文')
+            self.assertEqual(client.get('/recipes/unknown').status_code, 404)
+            self.assertEqual(client.get('/assets/../.env').status_code, 404)
+
+    def test_recipe_endpoint_requires_same_auth_as_ask(self):
+        app = create_app(self.config, replace(self.settings, api_key='test-key'),
+                         lambda cfg: self.system, lambda system: {'neo4j': 'ok'})
+        with TestClient(app) as client:
+            self.assertEqual(client.get('/recipes/test').status_code, 401)
+            self.assertEqual(client.get('/').status_code, 200)
+
 
 class ContractTests(unittest.TestCase):
     def test_sources_migration_safe_paths_and_url_encoding(self):
