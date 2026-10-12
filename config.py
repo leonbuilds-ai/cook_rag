@@ -21,6 +21,7 @@ class RAGConfig:
     embedding_num_ctx: int = 4096     #嵌入模型的上下文窗口
     embedding_batch_size: int = 8     #每次向 Ollama 提交 8 个文本块
 
+
     # 检索配置
     top_k: int = 3
 

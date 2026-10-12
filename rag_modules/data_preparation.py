@@ -56,7 +56,7 @@ class DataPreparationModule:
         documents = []
         data_path_obj = Path(self.data_path)
 
-        for md_file in data_path_obj.rglob("*.md"):
+        for md_file in data_path_obj.rglob("*.md"):  #递归搜索
             try:
                 # 直接读取文件内容，保持Markdown格式
                 with open(md_file, 'r', encoding='utf-8') as f:
@@ -200,8 +200,8 @@ class DataPreparationModule:
                     child_id = str(uuid.uuid4())
 
                     # 合并原文档元数据和新的标题元数据
-                    chunk.metadata.update(doc.metadata)
-                    chunk.metadata.update({
+                    chunk.metadata.update(doc.metadata)    #继承父文档信息
+                    chunk.metadata.update({                #设置当前子块自己的信息
                         "chunk_id": child_id,
                         "parent_id": parent_id,
                         "doc_type": "child",  # 标记为子文档
