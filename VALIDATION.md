@@ -2,7 +2,7 @@
 
 最新的 FastAPI、目录迁移与检索评估验收见 [2026-10-12 服务验收](docs/validation-2026-10-12.md)。下面保留此前升级与修复的记录。
 
-中文网站已新增，67 项回归与真实浏览器问答验证见 [网站使用与验证](docs/website.md)。
+中文网站已升级为流式聊天与持久化历史，72 项回归与真实模型、浏览器检查见 [流式与历史验收](docs/validation-streaming-2026-10-12.md)，操作说明见 [网站使用](docs/website.md)。
 
 验证日期：2026-10-12（Asia/Shanghai）。参考 C9 提交：`cec956e80ae28d6c0ca84c9d39dddcf61ad633fd`。
 

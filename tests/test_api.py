@@ -15,7 +15,9 @@ from evaluate import metrics
 class ApiTests(unittest.TestCase):
     def setUp(self):
         self.config = RAGConfig()
-        self.settings = ServiceConfig(queue_timeout_seconds=0)
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        self.settings = ServiceConfig(queue_timeout_seconds=0, history_db_path=str(Path(folder.name)/'history.sqlite3'))
         self.system = Mock(config=self.config)
         self.system.data_module.documents = [Document(page_content='食谱', metadata={})]
         def answer(question, strategy, memory, result_info):

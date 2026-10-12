@@ -25,6 +25,7 @@ dist/
 vector_index/
 *.log
 logs/
+runtime/
 
 # OS files
 Thumbs.db

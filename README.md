@@ -25,14 +25,17 @@
 
 | 功能 | 实现方式 |
 | --- | --- |
-| 中文问答网站 | 响应式聊天布局、三餐快捷入口、新对话、复制回答、食谱原文弹窗 |
+| 中文问答网站 | 响应式聊天布局、真实流式回答、停止生成、复制回答、食谱原文弹窗 |
+| 历史对话 | SQLite 保存多个对话，支持切换、搜索、重命名、删除和恢复；重启后可继续追问 |
+| 快捷选菜 | 早餐、清淡、快手、晚餐分别检索；同一对话重复点击会换一批候选 |
+| 原图展示 | 可用原图通过本地接口加载、统一卡片尺寸；空文件与 LFS 指针显示缺图占位 |
 | 菜名、用量和做法查询 | 语义向量 + 中文 BM25 + RRF，补回完整食谱 |
 | 食材筛选、排除条件 | 参数化 Cypher 查询实际 `REQUIRES` 关系 |
 | 相似菜品、共享食材 | 有界的两跳图查询，与原文检索融合 |
 | 推荐与偏好 | 推荐先展示简短名单；早餐按分类过滤，清淡条件依据完整原文保守筛选 |
 | 连续追问 | 近期对话、独立推荐菜单、编号/标题解析；疑似菜名错误先确认 |
 | 来源引用 | 答案中的 `[S1]` 标记、来源列表，以及 API 的结构化 `sources` |
-| HTTP 接入 | `/ask`、`/health`、自动 OpenAPI 文档、可选 Bearer key |
+| HTTP 接入 | `/ask`、`/ask/stream`、`/chats`、`/health`、OpenAPI 文档、可选 Bearer key |
 | 运行维护 | TOML 配置、环境变量、轮转 JSON 日志、请求 ID、会话容量和 TTL |
 | 检索评估 | 文档级 Recall@5、MRR@5，保留旧算法作对照，保存逐条排序结果 |
 
@@ -47,6 +50,7 @@
 | 向量存储 | Qdrant 1.14 系列、余弦相似度、元数据前置过滤 |
 | 图存储 | Neo4j 5、Recipe / Ingredient / CookingStep / Category |
 | 文本检索 | jieba、rank-bm25、Reciprocal Rank Fusion |
+| 网页与历史 | 原生 HTML / CSS / JavaScript、Fetch SSE、SQLite、浏览器归属 Cookie |
 | 数据处理 | Markdown 标题分块、父文档回填、确定性文本块 ID |
 | 质量检查 | unittest、内存 Qdrant、FastAPI TestClient、GitHub Actions |
 
@@ -101,7 +105,9 @@ ollama pull qwen3.5:9b
 
 PyCharm 中选择项目 `.venv` 解释器，右键运行 `serve.py`，看到服务启动成功后打开首页。停止时点击 Run 面板中的红色 Stop。若提示 8000 端口被占用，先确认是否已有后台实例；本项目脚本启动的实例可用 `scripts/stop-api.ps1` 停止。
 
-网页输入框支持 Enter 发送、Shift+Enter 换行，并兼容中文输入法。推荐下方可以点击菜名继续询问做法，回答中的 `[S1]` 和来源卡片可查看完整原文。当前标签页刷新后保留近期对话；服务重启或会话过期时开启新对话。网站使用本机接口，不上传问题到额外的网页服务；模型仍按 `.env` 配置调用。
+网页输入框支持 Enter 发送、Shift+Enter 换行，并兼容中文输入法。模型生成的内容会边生成边显示，点击发送按钮所在位置的方块可停止。推荐下方可以点击菜名问做法，或点“换一批推荐”；`[S1]` 和来源卡片可查看完整原文。
+
+左侧保存多段对话，可以搜索标题、切换、重命名或移到最近删除。刷新页面、重新打开浏览器或重启服务后，使用同一浏览器 Cookie 仍能访问历史并继续追问。聊天保存在 `runtime/history.sqlite3`，不会提交到 Git。网站使用本机接口；模型仍按 `.env` 配置调用。
 
 ## HTTP 调用
 
@@ -140,7 +146,7 @@ Invoke-RestMethod http://127.0.0.1:8000/ask -Method Post `
 }
 ```
 
-不传 `session_id` 就创建新会话；传回同一个 UUID 才能解析前文。`reset: true` 清空该会话。`strategy` 可选 `auto`、`hybrid_traditional`、`graph_rag`、`combined`。`/ask` 返回完整答案，终端支持流式输出。接口字段、错误码和会话规则见 [API 说明](docs/api.md)。
+不传 `session_id` 就创建新会话；传回同一个 UUID 才能解析前文。`reset: true` 清空该会话。`strategy` 可选 `auto`、`hybrid_traditional`、`graph_rag`、`combined`。`/ask` 返回完整答案；网站通过 `/ask/stream` 接收 SSE，使用持久化的 `chat_id`。接口字段、错误码和两种会话规则见 [API 说明](docs/api.md)。
 
 ## 终端使用
 
@@ -159,7 +165,7 @@ Invoke-RestMethod http://127.0.0.1:8000/ask -Method Post `
 
 日志默认写入 `logs/cook_rag.jsonl`，单文件 10 MiB、保留 3 个备份。每个 HTTP 请求都有 `X-Request-ID`，错误响应也包含该 ID。服务日志不记录问题正文、回答正文或请求中的密钥。
 
-当前服务使用一个 worker，模型请求串行执行，等待超过配置时间返回 429。会话保存在进程内，默认最多 200 个、空闲 1 小时过期；重启会清空。对外开放前设置 `APP_API_KEY`，通过 HTTPS 反向代理访问。多租户身份校验、Redis 会话、分布式队列和多 worker 协同尚未实现。
+当前服务使用一个 worker，模型请求串行执行。网页聊天与菜单持久化到 SQLite，每个浏览器通过随机 Cookie 访问自己的记录；这不是账号登录系统。旧 `/ask` 接口的会话仍保存在进程内，默认最多 200 个、空闲 1 小时过期。对外开放前设置 `APP_API_KEY`，通过 HTTPS 反向代理访问，并关闭 SSE 响应缓冲。多租户身份校验、分布式队列和多 worker 协同尚未实现。
 
 仓库提供 API [Dockerfile](Dockerfile)，模型与数据库单独运行。Docker 构建和 Linux CI 配置已提供，本次本机验证使用 Windows 虚拟环境和现有 Docker 数据库。
 
@@ -194,6 +200,10 @@ config.py / settings.toml  检索、模型和数据配置
 service_config.py         服务与日志配置
 rag_modules/              图导入、Qdrant、检索、生成、会话、引用
 web/                      中文聊天网站，HTML / CSS / JavaScript
+web_routes.py             SSE、历史管理与本地图片接口
+chat_store.py             SQLite 对话、菜单与推荐记录
+recipe_media.py           安全的原图路径解析与校验
+runtime/                  本地聊天数据库（不纳入 Git）
 data/cook/                食谱原文与原有图片
 evaluation/               标注问题和对比结果
 evaluate.py               Recall@5、MRR@5 评估入口

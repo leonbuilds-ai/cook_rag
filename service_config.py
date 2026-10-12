@@ -18,6 +18,7 @@ class ServiceConfig:
     log_file: str = str(ROOT / 'logs/cook_rag.jsonl')
     log_max_bytes: int = 10485760
     log_backup_count: int = 3
+    history_db_path: str = str(ROOT / 'runtime/history.sqlite3')
 
     def __post_init__(self):
         if not 1 <= self.port <= 65535 or self.max_sessions < 1 or self.session_ttl_seconds < 1:
@@ -43,9 +44,12 @@ def load_service_config(path=None):
     if 'api_key' in values:
         raise ValueError('APP_API_KEY 必须放在环境变量中')
     values['api_key'] = os.getenv('APP_API_KEY', '')
-    for name, variable, cast in [('host', 'API_HOST', str), ('port', 'API_PORT', int)]:
+    for name, variable, cast in [('host', 'API_HOST', str), ('port', 'API_PORT', int),
+                                 ('history_db_path', 'HISTORY_DB_PATH', str)]:
         if variable in os.environ:
             values[name] = cast(os.environ[variable])
     if 'log_file' in values:
         values['log_file'] = str((ROOT / values['log_file']).resolve())
+    if 'history_db_path' in values:
+        values['history_db_path'] = str((ROOT / values['history_db_path']).resolve())
     return ServiceConfig(**values)

@@ -38,6 +38,7 @@ docker run -d --name cook-qdrant -p 6333:6333 `
 | LLM_API_KEY / EMBED_API_KEY | 兼容接口密钥 | 本地 Ollama 可写 ollama |
 | EMBED_BATCH_SIZE | 嵌入批次 | 8 |
 | API_HOST / API_PORT | 服务监听地址 | 127.0.0.1 / 8000 |
+| HISTORY_DB_PATH | 网页历史 SQLite 文件 | runtime/history.sqlite3 |
 | APP_API_KEY | /ask 的 Bearer key | 空值表示关闭鉴权 |
 | RETRIEVAL_MODE | 检索模式 | recipe 或 baseline |
 | RAG_CONFIG | TOML 文件 | 项目根目录 settings.toml |
@@ -69,7 +70,7 @@ localhost / 127.0.0.1:11434 会自动使用 Ollama 原生接口，即使 URL 带
 
 修改 Markdown 后，先停服务（Ctrl+C），执行 `--import-local --build-only`，再启动。仅修改检索或服务参数时重启即可。修改模型、分块参数或原文会改变索引指纹，旧集合留存供人工核查；确认不再使用后自行清理本项目的旧集合。不要在多个进程中同时构建同一集合。
 
-服务器部署使用 `python serve.py`，由 systemd、Windows 服务工具或容器负责进程重启。暂时使用 **单 worker**，不要直接加 `--workers 4`：会话与模型锁都在进程内。默认等待锁 1 秒，满载返回 429；这适合单机模型服务，不承诺多用户高吞吐。
+服务器部署使用 `python serve.py`，由 systemd、Windows 服务工具或容器负责进程重启。使用 **单 worker**，不要直接加 `--workers 4`：旧 /ask 会话、模型锁与流式取消信号都在进程内，网页历史则保存到 SQLite。默认等待锁 1 秒；/ask 满载返回 429，SSE 已建立时用流内 busy 事件表示繁忙。适合单机模型服务，不承诺多用户高吞吐。
 
 Windows 本地也可以使用后台脚本：`./scripts/start-api.ps1` 启动，`./scripts/stop-api.ps1` 停止，再次执行启动脚本完成重启。进程记录保存在 `logs/api-processes.json`，停止前会核对进程命令属于当前项目。后台停止会结束进程，应在没有进行中的请求时操作；日志在 `logs/` 中，不弹出终端窗口。
 
@@ -85,7 +86,8 @@ docker run -d --name cook-rag-api -p 8000:8000 --env-file .env `
     -e LLM_BASE_URL=http://host.docker.internal:11434 `
     -e EMBED_BASE_URL=http://host.docker.internal:11434 `
     -e LLM_MODEL_TYPE=ollama -e EMBED_MODEL_TYPE=ollama `
-    -v cook-rag-index:/app/vector_index -v cook-rag-logs:/app/logs cook-rag:local
+    -v cook-rag-index:/app/vector_index -v cook-rag-logs:/app/logs `
+    -v cook-rag-history:/app/runtime cook-rag:local
 ```
 
 容器中的 localhost 指向容器自身。Linux 可把服务接入同一 Docker 网络，用数据库服务名连接；访问宿主机时需配置 `host-gateway`。Ollama 也必须监听容器可访问的地址。不要把宿主机 `.env` 拷进镜像，`.dockerignore` 已排除秘密、虚拟环境、索引和日志。镜像以普通用户运行。
@@ -96,7 +98,11 @@ Dockerfile 尚未在本次 Windows 验证中构建，部署前应在目标平台
 
 本地默认没有鉴权并只监听回环地址。开放网络访问时设置 `APP_API_KEY`，在反向代理上启用 HTTPS、请求体大小限制、速率限制和合适的生成等待超时。API key 只用于共享服务访问，不能替代用户身份与租户隔离。不要直接开放数据库端口到公网。
 
-会话、菜单和正在执行的模型请求都不会持久化。日志轮转记录请求 ID、方法、路径、状态和耗时，应用错误仅记录异常类型；不记录请求正文和凭据。需要排错时使用 request_id 关联日志，而不是将 `.env` 发到 issue 中。
+网页历史、已完成轮次的菜单和已推荐候选会持久化；旧 /ask 会话与执行中的模型请求不持久化。备份聊天数据库时，停机后复制 runtime/history.sqlite3，运行中使用 SQLite backup 接口，不能只复制可能带 WAL 的主文件。runtime 目录包含问题与回答，不要提交到公开仓库。浏览器 Cookie 是记录归属标识，清除后不能自动找回该浏览器的历史。
+
+反向代理需为 /ask/stream 关闭响应缓冲和缓存（例如 Nginx proxy_buffering off），设置足够的读取超时；否则浏览器可能等待整段内容才显示。停止生成会发送取消信号并关闭生成器，但底层模型或检索正在等待响应时不能保证立即释放。
+
+日志轮转记录请求 ID、方法、路径、状态和耗时，应用错误仅记录异常类型；不记录请求正文和凭据。流式 HTTP 耗时是响应头建立耗时，不代表整段生成耗时。排错时使用 request_id 关联日志。
 
 ## 常见问题
 

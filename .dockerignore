@@ -8,5 +8,6 @@ __pycache__
 **/__pycache__
 logs
 vector_index
+runtime
 .idea
 .vscode

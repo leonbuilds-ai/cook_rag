@@ -63,13 +63,16 @@ class RecipeRAGSystem:
                 break
         return filters
 
-    def retrieve(self, question, strategy='auto'):
+    def retrieve(self, question, strategy='auto', exclude_ids=None):
         if not self.system_ready:
             raise ValueError('请先初始化系统并构建知识库')
         if not question.strip():
             raise ValueError('问题不能为空')
         candidate_k = self.config.top_k * 3 if self.config.enable_parent_doc_retrieval else self.config.top_k
         filters = self._extract_filters_from_query(question)
+        if exclude_ids:
+            filters['parent_id'] = [d.metadata['parent_id'] for d in self.data_module.documents
+                                    if d.metadata['parent_id'] not in set(exclude_ids)]
         names = self.graph_rag_retrieval.extract_entities(question)['recipes']
         if names and not any(word in question for word in ('相似', '类似', '搭配', '关系', '推荐')):
             filters['parent_id'] = [d.metadata['parent_id'] for d in self.data_module.documents
@@ -107,7 +110,7 @@ class RecipeRAGSystem:
         return docs, analysis
 
     def ask_question_with_routing(self, question, stream=False, explain_routing=False, strategy='auto',
-                                  memory=None, result_info=None):
+                                  memory=None, result_info=None, exclude_ids=None):
         memory = memory if memory is not None else self.conversation
         info = result_info if result_info is not None else {}
         info.update(sources=[], resolved_query=question, kind='answer')
@@ -141,7 +144,11 @@ class RecipeRAGSystem:
         if explain_routing and resolution.query != question:
             preview = ' '.join(resolution.query.split())
             print(f'追问解析: {preview[:160]}' + ('…' if len(preview) > 160 else ''))
-        docs, analysis = self.retrieve(resolution.query, strategy)
+        docs, analysis = (self.retrieve(resolution.query, strategy, exclude_ids=exclude_ids)
+                          if exclude_ids else self.retrieve(resolution.query, strategy))
+        if not docs and exclude_ids:
+            docs, analysis = self.retrieve(resolution.query, strategy)
+            info['recommendation_reset'] = True
         if explain_routing:
             print(f'检索策略: {analysis.recommended_strategy.value}；{analysis.reasoning}')
         if not docs:
@@ -171,9 +178,13 @@ class RecipeRAGSystem:
         def remember_stream():
             parts = []
             # Commit only after normal exhaustion; interrupted/failed output is not a completed turn.
-            for part in answer:
-                parts.append(part)
-                yield part
+            try:
+                for part in answer:
+                    parts.append(part)
+                    yield part
+            finally:
+                if hasattr(answer, 'close'):
+                    answer.close()
             memory.remember(question, ''.join(parts), docs)
             yield source_footer(sources)
         return remember_stream(), analysis

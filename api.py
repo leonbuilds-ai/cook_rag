@@ -46,6 +46,7 @@ class Source(BaseModel):
     document_id: str
     path: str
     url: str | None = None
+    image: dict | None = None
 
 
 class AskResponse(BaseModel):
@@ -136,6 +137,7 @@ def create_app(config=None, settings=None, system_factory=RecipeRAGSystem, depen
         app.state.ready = False
         system = None
         try:
+            app.state.chat_store.recover_interrupted()
             system = system_factory(config)
             app.state.system = system
             await asyncio.to_thread(system.initialize_system)
@@ -221,7 +223,9 @@ def create_app(config=None, settings=None, system_factory=RecipeRAGSystem, depen
         for doc in app.state.system.data_module.documents:
             if doc.metadata.get('parent_id') == document_id:
                 return {'title': doc.metadata.get('dish_name', '食谱'), 'content': doc.page_content,
-                        'source': references([doc], config.source_base_url)[0]}
+                        'source': references([doc], config.source_base_url)[0],
+                        'display_content': app.state.recipe_media.rewrite(doc.metadata.get('source', ''), doc.page_content),
+                        'image': app.state.recipe_media.describe(doc.metadata.get('source', ''))}
         raise ServiceError(404, 'recipe_not_found', '没有找到这份食谱。')
 
     @app.post('/ask', response_model=AskResponse)
@@ -252,6 +256,8 @@ def create_app(config=None, settings=None, system_factory=RecipeRAGSystem, depen
         finally:
             lock.release()
 
+    from web_routes import register_web_routes
+    register_web_routes(app, config, settings, authenticate, ServiceError, AskRequest)
     return app
 
 

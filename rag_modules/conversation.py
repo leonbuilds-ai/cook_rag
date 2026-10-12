@@ -84,6 +84,19 @@ class ConversationMemory:
         self.menus.clear()
         self.pending_recipe = None
 
+    def snapshot(self):
+        return {'turns': [{'question': t.question, 'answer': t.answer, 'choices': t.choices} for t in self.turns],
+                'menus': [{str(k): {'title': v.title, 'recipes': list(v.recipes)} for k, v in m.items()}
+                          for m in self.menus], 'pending_recipe': self.pending_recipe}
+
+    def restore(self, state):
+        self.turns = [Turn(t['question'], t['answer'], {int(k): v for k, v in t['choices'].items()})
+                      for t in state.get('turns', [])][-self.max_turns:]
+        self.menus = [{int(k): MenuOption(v['title'], tuple(v['recipes'])) for k, v in m.items()}
+                      for m in state.get('menus', [])][-self.max_turns:]
+        self.pending_recipe = state.get('pending_recipe')
+        return self
+
     def messages(self):
         # Keep complete role pairs, giving the newest turn the largest share of the budget.
         pairs, remaining = [], self.max_chars

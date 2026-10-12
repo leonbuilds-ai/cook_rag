@@ -36,11 +36,44 @@
 
 检查图数据库查询、当前 Qdrant 集合和本地 Ollama 的模型列表，不执行生成。远程模型服务标记为 `configured`，调用能力以 `/ask` 的实际结果为准。启动异常时返回 `not_ready`，依赖异常返回 `degraded`。启动期间 Uvicorn 等待 lifespan 完成，健康检查可能尚不能连接。
 
-另返回 `auth_required`、`instance_id` 和 `session_ttl_seconds`。网站用于显示访问设置、识别服务重启及清理已过期的对话；instance_id 只是进程标识，不是密钥。
+另返回 `auth_required`、`instance_id` 和 `session_ttl_seconds`。网站用于显示连接状态与访问设置；session_ttl_seconds 仅适用于旧 `/ask` 会话，网页历史不随进程重启清除。instance_id 只是进程标识，不是密钥。
 
 ## GET /recipes/{document_id}
 
-返回当前知识库中该食谱的 `title`、完整 Markdown `content` 和 `source`。网站从 `/ask` 的 sources 获取 document_id，再调用此接口打开原文弹窗。不会接收或读取任意文件路径。开启 APP_API_KEY 后与 `/ask` 使用相同 Bearer 鉴权。找不到返回 404 `recipe_not_found`，知识库未就绪返回 503。
+返回 `title`、完整 Markdown `content`、`source`、带本地图片地址的 `display_content` 与 `image` 描述。原文 content 保持不变。网站从 sources 获取 document_id，再调用此接口打开原文弹窗。不会读取任意文件路径。开启 APP_API_KEY 后使用相同 Bearer 鉴权。找不到返回 404 `recipe_not_found`，知识库未就绪返回 503。
+
+## 网页聊天与 SSE
+
+先 `POST /chats` 创建对话，将响应的 id 作为 chat_id；使用 HTTP Cookie jar 保持响应设置的 `cook_browser` Cookie。没有 Cookie 或 Cookie 与记录不匹配时返回 404。Cookie 用于浏览器归属隔离，不是账号登录。
+
+| 方法与路径 | 用途 |
+| --- | --- |
+| GET /chats | 当前浏览器的最新 200 段对话；trash=true 查看最近删除 |
+| POST /chats | 创建对话，201 返回记录 |
+| GET /chats/{id} | 消息、状态、菜单记忆与 generating 标记 |
+| PATCH /chats/{id} | JSON title 重命名，去空格后 1–60 字符 |
+| DELETE /chats/{id} | 移到最近删除，可以恢复 |
+| POST /chats/{id}/restore | 恢复已删除对话 |
+| POST /chats/{id}/stop | 请求停止生成；不会立即打断正在等待的底层模型调用 |
+| POST /chats/import | 导入旧网页最多 30 轮 question / answer / document_ids；来源只接受当前知识库 ID |
+
+`POST /ask/stream` 接收 JSON：question、chat_id（必填 UUID）、strategy、reset，以及可选 topic（breakfast / light / quick / dinner）。不使用旧 session_id。reset 重置上下文与候选记录，保留已有消息。成功响应为 `text/event-stream`，前端使用 Fetch 读取，因为 EventSource 不支持 POST。
+
+事件顺序为 status → start → metadata → delta（多次）→ done。发生异常会发送 error 并结束；客户端需处理流内 error，即使 HTTP 已返回 200。
+
+```text
+event: delta
+data: {"text":"将面条煮熟"}
+
+event: done
+data: {"answer":"完整答案……","sources":[],"chat_id":"…","message_id":"…","kind":"answer","request_id":"…"}
+```
+
+start 提供 user_message_id 与 message_id；metadata 提供 resolved_query、kind、sources、retrieval_strategy、topic。来源多一个 image 字段：url、kind（original / missing）、label。done 包含完整答案与最终来源。响应设置 Cache-Control: no-cache,no-transform 和 X-Accel-Buffering: no；代理也应关闭响应缓冲。
+
+一段对话同时只能生成一次；生成期间重命名或删除返回 409 chat_busy。模型锁被其他请求占用时流内返回 busy，不追加用户消息。连接中断或 stop 请求让 worker 关闭生成器、保存部分回答并释放锁；底层请求未返回时可能需要等待。消息状态为 complete / streaming / stopped / error / interrupted。未完成回答不会进入后续模型记忆，服务启动会将残留 streaming 标记为 interrupted。
+
+`GET /recipe-media/{relative}` 仅返回 data/cook 下有有效文件头的图片；路径越界、非图片和空文件返回 404。它与食谱数据一样是公开静态资源，不包含聊天内容。
 
 ## 错误与并发
 
@@ -57,6 +90,6 @@
 | 503 | not_ready | 启动未完成或启动失败 |
 | 500 | internal_error | 其他服务异常 |
 
-429 带 `Retry-After: 2`；调用方应适度退避。Uvicorn 在连接数超过 64 时也可能直接返回自身的 503，这类响应不保证使用应用错误格式。模型执行串行；`/health` 不占用模型锁。API 不提供 SSE，CLI 可流式生成。
+429 带 `Retry-After: 2`；调用方应适度退避。Uvicorn 在连接数超过 64 时也可能直接返回自身的 503，这类响应不保证使用应用错误格式。模型执行串行；`/health` 不占用模型锁。`/ask` 返回完整 JSON，`/ask/stream` 与 CLI 支持流式生成。
 
 应用错误不会回传原始异常、请求正文或凭据。`request_id` 同时出现在响应体、`X-Request-ID` 和日志中，用于关联排查。
