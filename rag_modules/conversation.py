@@ -19,6 +19,7 @@ def number(text):
 class FollowUp:
     query: str
     clarification: str = ''
+    uses_history: bool = True
 
 
 @dataclass
@@ -125,9 +126,13 @@ class ConversationMemory:
         return FollowUp(f'{names}怎么做？')
 
     def resolve(self, question, known_names, llm):
+        references = re.search(r'刚才|上面|上一条|那个|这个|这道|它|这样|之前|最初|前面|上上|原来|原先|继续|再|换|其他|别的|还有|还是|另一个|第\s*(?:\d+|[一二三四五六七八九十两])\s*(?:个|道|项)|(?<![\d.])\d+[.)、](?!\d)', question)
         # Explicit dish names indicate a self-contained query or a topic change.
         if any(name and name in question for name in known_names):
-            return FollowUp(question)
+            return FollowUp(question, uses_history=bool(references))
+        # Standalone recommendations are new searches, not an invitation to rewrite old answers.
+        if not references and re.search(r'吃什么|吃啥|推荐|有哪些|有什么|喝什么', question):
+            return FollowUp(question, uses_history=False)
         ordinal = re.search(r'第\s*(\d+|[一二三四五六七八九十两])\s*(?:个|道|种|款|项)(?!步骤|操作|阶段)', question)
         copied = re.search(r'(?<![\d.])([0-9]+|[一二三四五六七八九十])[.)、]\s*(?!\d)', question)
         index = number(ordinal[1]) if ordinal else number(copied[1]) if copied else None
@@ -153,8 +158,10 @@ class ConversationMemory:
         if not self.turns:
             if re.search(r'刚才|上面|上一条|那个|这个|这道|它', question):
                 return FollowUp(question, '当前会话还没有可参考的菜谱，请先告诉我菜名。')
-            return FollowUp(question)
+            return FollowUp(question, uses_history=False)
         related = re.search(r'刚才|上面|上一条|那个|这个|这道|它|继续|多少|多久|几分钟|食材|材料|用量|步骤|放盐|放油', question)
+        if not references and not related:
+            return FollowUp(question, uses_history=False)
         historical = re.search(r'之前|最初|一开始|前面|最开始|第一次|上上|原来|原先', question)
         if related and not historical and len(set(choices.values())) == 1:
             return FollowUp(f'{next(iter(choices.values()))}：{question}')
@@ -171,14 +178,18 @@ class ConversationMemory:
         try:
             response = llm.invoke([prompt, *self.messages(), HumanMessage(content=question)])
             text = response.content.strip()
+            if len(text) > 1500:
+                raise ValueError('Follow-up output is not a compact query')
             text = re.sub(r'^```(?:json)?\s*|\s*```$', '', text)
             result = json.loads(text)
             query, clarification = result.get('query'), result.get('clarification', '')
-            if not isinstance(query, str) or not query.strip() or len(query) > 1000 or not isinstance(clarification, str):
+            if (not isinstance(query, str) or not query.strip() or len(query) > 200
+                    or re.search(r'[\r\n#]|为您推荐以下|食谱库为您|所需食材|制作步骤|(?:回答|特点|答案)[:：]', query)
+                    or not isinstance(clarification, str)):
                 raise ValueError('Invalid follow-up resolution')
             return FollowUp(query.strip(), clarification[:500])
         except Exception:
             logger.warning('追问解析不可用，使用明确菜名或请求澄清')
-            if related:
+            if references or related:
                 return FollowUp(question, '你指的是上一条回复中的哪道菜？请告诉我菜名或编号。')
-            return FollowUp(question)
+            return FollowUp(question, uses_history=False)

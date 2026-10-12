@@ -17,3 +17,8 @@ def direct_intent(question):
                 '你有哪些食谱', '你有哪些菜谱'}:
         return 'catalog'
     return None
+
+
+def is_recommendation(question):
+    return bool(re.search(r'吃什么|吃啥|喝什么|推荐|有哪些|有什么', question)
+                and not re.search(r'怎么做|如何做|制作|做法|步骤|食材|用量|比较|区别|为什么', question))

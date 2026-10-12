@@ -3,6 +3,7 @@
 """
 
 import logging
+import re
 from typing import List
 
 from langchain_core.prompts import ChatPromptTemplate, PromptTemplate
@@ -279,20 +280,24 @@ class GenerationIntegrationModule:
         if not context_docs:
             return "抱歉，没有找到相关的菜品信息。"
 
-        # 提取菜品名称
-        dish_names = []
+        dishes = []
+        seen = set()
         for doc in context_docs:
             dish_name = doc.metadata.get('dish_name', '未知菜品')
-            if dish_name not in dish_names:
-                dish_names.append(dish_name)
-
-        # 构建简洁的列表回答
-        if len(dish_names) == 1:
-            return f"为您推荐：{dish_names[0]}"
-        elif len(dish_names) <= 3:
-            return f"为您推荐以下菜品：\n" + "\n".join([f"{i+1}. {name}" for i, name in enumerate(dish_names)])
-        else:
-            return f"为您推荐以下菜品：\n" + "\n".join([f"{i+1}. {name}" for i, name in enumerate(dish_names[:3])]) + f"\n\n还有其他 {len(dish_names)-3} 道菜品可供选择。"
+            if dish_name not in seen:
+                seen.add(dish_name)
+                dishes.append(doc)
+        requested = re.search(r'([1-9]|[一二两三四五六七八九十])\s*(?:个|道|种|款)', query)
+        numbers = {'一': 1, '二': 2, '两': 2, '三': 3, '四': 4, '五': 5,
+                   '六': 6, '七': 7, '八': 8, '九': 9, '十': 10}
+        limit = (int(requested[1]) if requested[1].isdigit() else numbers[requested[1]]) if requested else 3
+        rows = []
+        for i, doc in enumerate(dishes[:limit], 1):
+            details = [doc.metadata[key] for key in ('category', 'difficulty')
+                       if doc.metadata.get(key) and doc.metadata[key] != '未知']
+            suffix = f"（{'，'.join(details)}）" if details else ''
+            rows.append(f"{i}. {doc.metadata['dish_name']}{suffix}")
+        return '为你推荐：\n' + '\n'.join(rows) + '\n\n可以回复编号或菜名，我再给你做法。'
 
     def generate_basic_answer_stream(self, query: str, context_docs: List[Document], history=None):
         """

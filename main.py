@@ -7,7 +7,7 @@ from collections import Counter
 from config import DEFAULT_CONFIG
 from langchain_core.documents import Document
 from rag_modules.conversation import ConversationMemory
-from rag_modules.dialogue_intent import direct_intent
+from rag_modules.dialogue_intent import direct_intent, is_recommendation
 from rag_modules import (GraphDataPreparationModule, QdrantIndexConstructionModule,
     RetrievalOptimizationModule, GenerationIntegrationModule, GraphRAGRetrieval, IntelligentQueryRouter)
 
@@ -115,14 +115,20 @@ class RecipeRAGSystem:
             [d.metadata['dish_name'] for d in self.data_module.documents], self.generation_module.llm)
         if resolution.clarification:
             return resolution.clarification, None
-        history = self.conversation.messages()
+        history = self.conversation.messages() if resolution.uses_history else []
         if explain_routing and resolution.query != question:
-            print(f'追问解析: {resolution.query}')
+            preview = ' '.join(resolution.query.split())
+            print(f'追问解析: {preview[:160]}' + ('…' if len(preview) > 160 else ''))
         docs, analysis = self.retrieve(resolution.query, strategy)
         if explain_routing:
             print(f'检索策略: {analysis.recommended_strategy.value}；{analysis.reasoning}')
         if not docs:
             return '没有找到符合条件的食谱，请调整菜品、食材或过滤条件。', analysis
+        if is_recommendation(resolution.query):
+            # Recommend actual retrieved recipes once; details are fetched when a dish is selected.
+            answer = self.generation_module.generate_list_answer(resolution.query, docs)
+            self.conversation.remember(question, answer, docs)
+            return answer, analysis
         if any(word in resolution.query for word in ('怎么做', '步骤', '制作方法', '做法')):
             generate = (self.generation_module.generate_step_by_step_answer_stream if stream
                         else self.generation_module.generate_step_by_step_answer)

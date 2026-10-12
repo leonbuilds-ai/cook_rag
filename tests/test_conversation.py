@@ -148,7 +148,7 @@ class SystemTests(unittest.TestCase):
         self.system.retrieve = Mock(return_value=(self.docs, Mock()))
 
     def test_two_turns_selection_and_generation_history(self):
-        self.system.generation_module.generate_basic_answer.return_value = '1. 麻婆豆腐\n2. 西红柿炒鸡蛋'
+        self.system.generation_module.generate_list_answer.return_value = '1. 麻婆豆腐\n2. 西红柿炒鸡蛋'
         self.system.ask_question('推荐两个菜')
         self.system.retrieve.return_value = ([self.docs[0]], Mock())
         self.system.generation_module.generate_step_by_step_answer.return_value = '西红柿炒鸡蛋：先炒蛋，再炒西红柿。'
@@ -161,7 +161,7 @@ class SystemTests(unittest.TestCase):
 
     def test_stream_remembered_only_after_exhaustion(self):
         self.system.generation_module.generate_basic_answer_stream.return_value = iter(['1. 麻婆', '豆腐\n2. 西红柿炒鸡蛋'])
-        stream = self.system.ask_question('推荐两个菜', stream=True)
+        stream = self.system.ask_question('比较这两道菜', stream=True)
         self.assertEqual(len(self.system.conversation.turns), 0)
         self.assertEqual(next(stream), '1. 麻婆')
         self.assertEqual(len(self.system.conversation.turns), 0)
@@ -170,7 +170,7 @@ class SystemTests(unittest.TestCase):
 
     def test_interrupted_or_failed_stream_is_not_recorded(self):
         self.system.generation_module.generate_basic_answer_stream.return_value = iter(['hello', 'world'])
-        stream = self.system.ask_question('推荐两个菜', stream=True)
+        stream = self.system.ask_question('比较这两道菜', stream=True)
         next(stream)
         stream.close()
         self.assertEqual(self.system.conversation.turns, [])
@@ -179,7 +179,7 @@ class SystemTests(unittest.TestCase):
             raise RuntimeError('failed')
         self.system.generation_module.generate_basic_answer_stream.return_value = broken()
         with self.assertRaises(RuntimeError):
-            list(self.system.ask_question('推荐两个菜', stream=True))
+            list(self.system.ask_question('比较这两道菜', stream=True))
         self.assertEqual(self.system.conversation.turns, [])
 
     def test_clarification_does_not_retrieve_and_sessions_are_isolated(self):
@@ -211,7 +211,7 @@ class SystemTests(unittest.TestCase):
     def test_user_reported_three_turn_flow_retrieves_new_recipe(self):
         self.system.data_module.documents = DINNER_DOCS
         self.system.retrieve.return_value = (DINNER_DOCS, Mock())
-        self.system.generation_module.generate_basic_answer.return_value = DINNER
+        self.system.generation_module.generate_list_answer.return_value = DINNER
         self.system.ask_question('晚餐吃什么')
         self.system.retrieve.return_value = ([recipe('葱油拌面')], Mock())
         self.system.generation_module.generate_step_by_step_answer.return_value = '葱油拌面的详细做法'
