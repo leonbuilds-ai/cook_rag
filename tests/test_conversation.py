@@ -82,6 +82,10 @@ class MemoryTests(unittest.TestCase):
         sources=[{'id':f'S{i}','title':name} for i,name in enumerate(names,1)]
         self.memory.remember('想喝点饮品',answer,[recipe(n) for n in reversed(names)],sources)
         self.memory.remember('S4','金菲士的做法',[recipe('金菲士')],[{'id':'S1','title':'金菲士'}])
+        # Even an older, erroneous multi-recipe response to a source selection
+        # must not replace the recommendation's source labels on replay.
+        self.memory.remember('S4','1. 蒸米饭\n2. 排骨汤',[recipe('蒸米饭'),recipe('排骨汤')],
+                             [{'id':'S1','title':'蒸米饭'},{'id':'S4','title':'排骨汤'}])
         restored=ConversationMemory().restore(self.memory.snapshot())
         for question in ('S4','s4','[S4]','选S4','S4怎么做'):
             self.assertEqual(restored.resolve(question,[],self.llm).query,'金菲士怎么做？')

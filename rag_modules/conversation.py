@@ -92,7 +92,8 @@ def recommendation_options(question, answer, names):
     options = extract_options(answer, mentioned)
     menu_request = re.search(r'推荐|吃什么|选项|菜单|有哪些|有什么|吃啥|喝什么', question)
     selection = (re.search(r'第\s*(?:\d+|[一二三四五六七八九十两])\s*(?:个|道|项)|\d+[.)、]', question)
-                 or re.fullmatch(BARE_NUMBER, question))
+                 or re.fullmatch(BARE_NUMBER, question)
+                 or re.match(r'^\s*(?:选择|我选|选)?\s*\[?[sS]\s*\d+\]?', question))
     detail = re.search(r'怎么做|步骤|做法|制作|需要|多少', question)
     return options if options and not selection and (menu_request or (len(mentioned) > 1 and not detail)) else {}
 
