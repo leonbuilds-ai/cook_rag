@@ -2,6 +2,7 @@
 import json
 import re
 import logging
+import unicodedata
 from difflib import SequenceMatcher
 from dataclasses import dataclass
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
@@ -42,6 +43,20 @@ def plain_title(text):
     return re.sub(r'[^\w\u4e00-\u9fff]', '', text)
 
 
+def displayed_name(text):
+    """Ignore presentation whitespace/width/case, retain actual name characters."""
+    return re.sub(r'\s+', '', unicodedata.normalize('NFKC', text)).casefold()
+
+
+def mentioned_names(text, names):
+    normalized = displayed_name(text)
+    hits = [(normalized.find(displayed_name(name)), name) for name in names if displayed_name(name)]
+    hits = sorted((hit for hit in hits if hit[0] >= 0), key=lambda hit: (hit[0], -len(hit[1]), hit[1]))
+    return [name for _, name in hits if not any(
+        displayed_name(name) != displayed_name(other) and displayed_name(name) in displayed_name(other)
+        for _, other in hits)]
+
+
 def extract_options(answer, names):
     """Numbered headings own their whole section, including multi-dish combinations."""
     options = {}
@@ -57,17 +72,27 @@ def extract_options(answer, names):
                 end = following.start()
                 break
         section = answer[header.start():end]
-        hits = tuple(sorted((n for n in names if n in section), key=section.index))
+        hits = tuple(mentioned_names(section, names))
         if hits:
             options[number(match[1])] = MenuOption(match[2].strip('* ')[:120], hits)
     if not options:
         for line in answer.splitlines():
             match = re.match(r'^\s{0,3}' + numbered, line)
             if match:
-                hits = tuple(sorted((n for n in names if n in match[2]), key=match[2].index))
+                hits = tuple(mentioned_names(match[2], names))
                 if hits:
                     options[number(match[1])] = MenuOption(match[2].strip('* ')[:120], hits)
     return options
+
+
+def recommendation_options(question, answer, names):
+    mentioned = mentioned_names(answer, names)
+    options = extract_options(answer, mentioned)
+    menu_request = re.search(r'推荐|吃什么|选项|菜单|有哪些|有什么|吃啥|喝什么', question)
+    selection = (re.search(r'第\s*(?:\d+|[一二三四五六七八九十两])\s*(?:个|道|项)|\d+[.)、]', question)
+                 or re.fullmatch(BARE_NUMBER, question))
+    detail = re.search(r'怎么做|步骤|做法|制作|需要|多少', question)
+    return options if options and not selection and (menu_request or (len(mentioned) > 1 and not detail)) else {}
 
 
 class ConversationMemory:
@@ -89,12 +114,21 @@ class ConversationMemory:
                 'menus': [{str(k): {'title': v.title, 'recipes': list(v.recipes)} for k, v in m.items()}
                           for m in self.menus], 'pending_recipe': self.pending_recipe}
 
-    def restore(self, state):
+    def restore(self, state, source_history=()):
         self.turns = [Turn(t['question'], t['answer'], {int(k): v for k, v in t['choices'].items()})
                       for t in state.get('turns', [])][-self.max_turns:]
         self.menus = [{int(k): MenuOption(v['title'], tuple(v['recipes'])) for k, v in m.items()}
                       for m in state.get('menus', [])][-self.max_turns:]
         self.pending_recipe = state.get('pending_recipe')
+        # Repair older persisted menus from completed answers and their own
+        # provenance, never from arbitrary library or retrieval ranking.
+        for question, answer, names in source_history:
+            options = recommendation_options(question, answer, names)
+            if options:
+                self.menus = [menu for menu in self.menus if not all(
+                    index in options and option == options[index] for index, option in menu.items())]
+                self.menus.append(options)
+                self.menus = self.menus[-self.max_turns:]
         return self
 
     def messages(self):
@@ -112,17 +146,12 @@ class ConversationMemory:
     def remember(self, question, answer, docs):
         names = {d.metadata['dish_name'] for d in docs if d.metadata.get('dish_name')}
         # Detect names in the answer, never use retrieval ranking as the displayed list order.
-        mentioned = sorted((n for n in names if n in answer), key=answer.index)
-        mentioned = [n for n in mentioned if not any(n != other and n in other for other in mentioned)]
+        mentioned = mentioned_names(answer, names)
         options = extract_options(answer, mentioned)
         choices = {index: option.recipes[0] for index, option in options.items() if len(option.recipes) == 1}
-        menu_request = re.search(r'推荐|吃什么|选项|菜单|有哪些|有什么|吃啥|喝什么', question)
-        selection = (re.search(r'第\s*(?:\d+|[一二三四五六七八九十两])\s*(?:个|道|项)|\d+[.)、]', question)
-                     or re.fullmatch(BARE_NUMBER, question))
-        detail = re.search(r'怎么做|步骤|做法|制作|需要|多少', question)
-        is_menu = options and not selection and (menu_request or (len(mentioned) > 1 and not detail))
-        if is_menu:
-            self.menus.append(options)
+        menu = recommendation_options(question, answer, names)
+        if menu:
+            self.menus.append(menu)
             self.menus = self.menus[-self.max_turns:]
         if not choices:
             choices = dict(enumerate(mentioned, 1))

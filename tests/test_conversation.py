@@ -40,6 +40,42 @@ class MemoryTests(unittest.TestCase):
         self.assertIn('西红柿炒鸡蛋', resolved.query)
         self.llm.invoke.assert_not_called()
 
+    def test_drink_display_spaces_preserve_numbered_selection(self):
+        docs = [recipe(n) for n in ('冬瓜茶', 'B52轰炸机', '酸梅汤', '金菲士', '百香果橙子特调')]
+        answer = ('### 🍹 推荐饮品清单\n1. **B52 轰炸机** [S1]\n- 原料：咖啡酒。\n'
+                  '2. **冬瓜茶** [S2]\n3. **酸梅汤** [S3]\n4. **金菲士** [S4]\n5. **百香果橙子特调** [S5]')
+        self.memory.remember('我想喝饮品', answer, docs)
+        self.assertEqual(self.memory.menus[-1][1].recipes, ('B52轰炸机',))
+        restored=ConversationMemory().restore(self.memory.snapshot())
+        for question in ('第一个','1','第一个怎么做'):
+            result=restored.resolve(question,[],self.llm)
+            self.assertFalse(result.clarification)
+            self.assertIn('B52轰炸机',result.query)
+        self.llm.invoke.assert_not_called()
+
+    def test_restore_repairs_incomplete_menu_using_only_answer_sources(self):
+        from web_routes import menu_source_history
+        answer='1. **B52 轰炸机** [S1]\n2. **冬瓜茶** [S2]'
+        # Reproduce the old implementation's incomplete menu.
+        self.memory.remember('推荐饮品',answer,[recipe('冬瓜茶')])
+        self.assertNotIn(1,self.memory.menus[-1])
+        messages=[{'role':'user','content':'我想喝饮品'},
+                  {'role':'assistant','status':'complete','content':answer,
+                   'payload':{'sources':[{'title':'B52轰炸机'},{'title':'冬瓜茶'}]}}]
+        restored=ConversationMemory().restore(self.memory.snapshot(), menu_source_history(messages))
+        self.assertEqual(len(restored.menus),1)
+        self.assertIn('B52轰炸机',restored.resolve('1',[],self.llm).query)
+        messages[-1]['status']='stopped'
+        untouched=ConversationMemory().restore(self.memory.snapshot(), menu_source_history(messages))
+        self.assertTrue(untouched.resolve('1',[],self.llm).clarification)
+
+    def test_display_normalization_does_not_fuzzy_match_or_renumber(self):
+        self.memory.remember('推荐饮品','1. **B52 神秘饮料**\n3. **冬 瓜 茶**',
+                             [recipe('B52轰炸机'),recipe('冬瓜茶')])
+        self.assertTrue(self.memory.resolve('1',[],self.llm).clarification)
+        self.assertIn('冬瓜茶',self.memory.resolve('3',[],self.llm).query)
+        self.assertTrue(self.memory.resolve('2',[],self.llm).clarification)
+
     def test_explicit_numbers_and_markdown_heading(self):
         self.memory.remember('推荐几个菜', '### 1. **麻婆豆腐**\n### 3. **西红柿炒鸡蛋**', self.docs)
         self.assertIn('西红柿炒鸡蛋', self.memory.resolve('第3道', [], self.llm).query)

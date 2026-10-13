@@ -24,6 +24,17 @@ logger = logging.getLogger('cook_rag.web')
 COOKIE = 'cook_browser'
 
 
+def menu_source_history(messages):
+    question = ''
+    for message in messages:
+        if message['role'] == 'user':
+            question = message['content']
+        elif message['role'] == 'assistant' and message['status'] == 'complete':
+            names = {source['title'] for source in message['payload'].get('sources', []) if source.get('title')}
+            if names:
+                yield question, message['content'].split('\n\n文档来源：')[0], names
+
+
 def register_web_routes(app, config, settings, authenticate, Error, AskModel):
     store = ChatStore(settings.history_db_path, settings.database_url)
     media = RecipeMedia(config.data_path)
@@ -217,7 +228,8 @@ def register_web_routes(app, config, settings, authenticate, Error, AskModel):
                     emit('error', {'code': 'chat_not_found', 'message': '这段对话已删除。'})
                     return
                 memory = ConversationMemory(config.conversation_max_turns, config.conversation_max_chars).restore(
-                    {} if body.reset else current['memory'])
+                    {} if body.reset else current['memory'],
+                    source_history=() if body.reset else menu_source_history(current['messages']))
                 user_id, answer_id = store.begin(user, chat_id, body.question)
                 emit('start', {'chat_id': chat_id, 'user_message_id': user_id,
                                'message_id': answer_id, 'request_id': request_id})
