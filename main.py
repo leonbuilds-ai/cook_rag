@@ -3,6 +3,7 @@ import argparse
 import json
 import logging
 import sys
+import re
 from collections import Counter
 from config import DEFAULT_CONFIG
 from langchain_core.documents import Document
@@ -64,6 +65,7 @@ class RecipeRAGSystem:
 
     def _extract_filters_from_query(self, query):
         filters = {}
+        if re.search(r'饮品|饮料|喝什么', query): filters['category'] = '饮品'
         for category in self.data_module.get_supported_categories():
             if category in query:
                 filters['category'] = category
@@ -157,8 +159,11 @@ class RecipeRAGSystem:
                         '、'.join(f'{name}（{count}份）' for name, count in sorted(categories.items())) +
                         '。可以指定分类或食材，让我推荐几道菜。'), None
             return replies[intent], None
+        from rag_modules.cancellation import stop_signal
+        from rag_modules.model_clients import create_llm
         resolution = memory.resolve(question,
-            [d.metadata['dish_name'] for d in self.data_module.documents], self.generation_module.llm)
+            [d.metadata['dish_name'] for d in self.data_module.documents],
+            create_llm(self.config) if stop_signal.get() is not None else self.generation_module.llm)
         if resolution.clarification:
             info['kind'] = 'clarification'
             return resolution.clarification, None
@@ -188,7 +193,7 @@ class RecipeRAGSystem:
             sources = [s for s in sources if s['title'] in answer]
             sources = [{**s, 'id': f'S{i}'} for i, s in enumerate(sources, 1)]
             info.update(sources=sources, kind='recommendation')
-            memory.remember(question, answer, docs)
+            memory.remember(question, answer, docs, sources)
             return answer + source_footer(sources), analysis
         info['sources'] = sources
         if any(word in resolution.query for word in ('怎么做', '步骤', '制作方法', '做法')):
@@ -200,7 +205,7 @@ class RecipeRAGSystem:
         generation_query = question if resolution.query == question else f'用户原始提问：{question}\n已解析的追问：{resolution.query}'
         answer = generate(generation_query, docs, history=history)
         if not stream:
-            memory.remember(question, answer, docs)
+            memory.remember(question, answer, docs, sources)
             return answer + source_footer(sources), analysis
         def remember_stream():
             parts = []
@@ -212,7 +217,7 @@ class RecipeRAGSystem:
             finally:
                 if hasattr(answer, 'close'):
                     answer.close()
-            memory.remember(question, ''.join(parts), docs)
+            memory.remember(question, ''.join(parts), docs, sources)
             yield source_footer(sources)
         return remember_stream(), analysis
 

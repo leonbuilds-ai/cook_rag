@@ -1,5 +1,9 @@
 # API
 
+`POST /suggestions` 接收 `{ "exclude_ids": [] }`（最多 500 项），返回 `suggestions` 和 `reset_topics`。从早餐、原文符合清淡筛选的菜品、简单家常菜三类随机选取实际食谱；优先避开排除 ID，耗尽才重新开始。结果包含真实 document_id、title、topic 与可直接提问的 question。
+
+`POST /ask/stream` 可携带 `exclude_ids`（最多 500 项），仅用于推荐请求；网页保存浏览器近期推荐，并在新对话中发送这些 ID。topic 新增 `drinks`。响应仍保留结构化 sources 和原始引用，网页默认隐藏正文标记并收起依据，不改变 API 数据。
+
 启动：`python serve.py`。OpenAPI：`GET /openapi.json`，交互文档：`GET /docs`。
 
 日常使用访问网站首页 `GET /`；`/docs` 保留为开发者调试页。`/assets` 仅提供 web 目录的静态文件。
@@ -54,10 +58,10 @@
 | PATCH /chats/{id} | JSON title 重命名，去空格后 1–60 字符 |
 | DELETE /chats/{id} | 移到最近删除，可以恢复 |
 | POST /chats/{id}/restore | 恢复已删除对话 |
-| POST /chats/{id}/stop | 请求停止生成；不会立即打断正在等待的底层模型调用 |
+| POST /chats/{id}/stop | 取消异步模型流，保存部分回答并释放锁；同步检索仍需等待返回 |
 | POST /chats/import | 导入旧网页最多 30 轮 question / answer / document_ids；来源只接受当前知识库 ID |
 
-`POST /ask/stream` 接收 JSON：question、chat_id（必填 UUID）、strategy、reset，以及可选 topic（breakfast / light / quick / dinner）。不使用旧 session_id。reset 重置上下文与候选记录，保留已有消息。成功响应为 `text/event-stream`，前端使用 Fetch 读取，因为 EventSource 不支持 POST。
+`POST /ask/stream` 接收 JSON：question、chat_id（必填 UUID）、strategy、reset，以及可选 topic（breakfast / light / quick / dinner / drinks）与 exclude_ids。不使用旧 session_id。reset 重置对话上下文与该对话的候选记录，保留已有消息；浏览器近期推荐记录单独用于换批。成功响应为 `text/event-stream`，前端使用 Fetch 读取，因为 EventSource 不支持 POST。
 
 事件顺序为 status → start → metadata → delta（多次）→ done。发生异常会发送 error 并结束；客户端需处理流内 error，即使 HTTP 已返回 200。
 

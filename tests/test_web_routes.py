@@ -61,6 +61,35 @@ class WebRoutesTests(unittest.TestCase):
     def make_app(self):
         return create_app(self.config, self.settings, FakeSystem, lambda s: {'neo4j': 'ok'})
 
+    def test_home_suggestions_respect_pool_and_exclusions(self):
+        with TestClient(self.app) as client:
+            docs=self.app.state.system.data_module.documents
+            for index in range(6):
+                docs[index].metadata['difficulty']='简单'
+                docs.append(Document(page_content='清淡的煮汤', metadata={'dish_name':f'汤{index}',
+                    'parent_id':f'soup{index}','category':'汤品','source':f'data/cook/soup{index}.md'}))
+            first=client.post('/suggestions',json={}).json()['suggestions']
+            excluded=[item['document_id'] for item in first]
+            second=client.post('/suggestions',json={'exclude_ids':excluded}).json()['suggestions']
+            self.assertEqual(len(first),3); self.assertEqual(len(second),3)
+            self.assertFalse(set(excluded)&{item['document_id'] for item in second})
+            self.assertEqual({item['topic'] for item in second},{'breakfast','light','quick'})
+            docs.append(Document(page_content='简单饮品',metadata={'dish_name':'饮品测试','parent_id':'drink0',
+                'category':'饮品','difficulty':'简单','source':'data/cook/drink0.md'}))
+            exhausted=client.post('/suggestions',json={'exclude_ids':[doc.metadata['parent_id'] for doc in docs if doc.metadata['parent_id']!='drink0']}).json()
+            quick=next(item for item in exhausted['suggestions'] if item['topic']=='quick')
+            self.assertNotEqual(quick['document_id'],'drink0')
+            self.assertIn('quick',exhausted['reset_topics'])
+
+    def test_new_chat_recommendation_excludes_browser_previous_batch(self):
+        with TestClient(self.app) as client:
+            chat=client.post('/chats').json()
+            first=events(client.post('/ask/stream',json={'chat_id':chat['id'],'question':'早餐吃什么'}))[-1][1]['sources']
+            chat2=client.post('/chats').json()
+            second=events(client.post('/ask/stream',json={'chat_id':chat2['id'],'question':'早餐吃什么',
+                'exclude_ids':[source['document_id'] for source in first]}))[-1][1]['sources']
+            self.assertFalse({source['document_id'] for source in first}&{source['document_id'] for source in second})
+
     def test_sse_deltas_persist_and_menu_survives_restart(self):
         with TestClient(self.app) as client:
             chat = client.post('/chats').json()

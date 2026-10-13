@@ -3,8 +3,8 @@
 const $ = (selector) => document.querySelector(selector);
 const icon = (name) => `<svg aria-hidden="true"><use href="#i-${name}"/></svg>`;
 const escapeHtml = (value) => String(value).replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const state = {chatId:null, messages:[], chats:[], busy:false, key:'', controller:null, trash:false, renameId:null, autoScroll:true};
-let toastTimer, renderTimer;
+const state = {chatId:null, messages:[], chats:[], busy:false, key:'', controller:null, turn:null, observer:null, trash:false, renameId:null, autoScroll:true, suggested:[], seen:{}, suggestionsLoaded:false};
+let toastTimer;
 function safeUrl(value) {
   try { const url = new URL(value, location.origin); return ['https:','http:'].includes(url.protocol) ? url.href : null; }
   catch { return null; }
@@ -71,7 +71,7 @@ function closeSidebar() {$('#sidebar').classList.remove('open'); $('#sidebar-sha
 function resizeInput() {const input=$('#question'); input.style.height='auto'; input.style.height=Math.min(input.scrollHeight,135)+'px';}
 function scrollEnd(force=false) {if(force || state.autoScroll) $('#scroll-area').scrollTo({top:$('#scroll-area').scrollHeight,behavior:force?'smooth':'auto'});}
 function setBusy(busy) {
-  state.busy=busy; $('#new-chat').disabled=busy; $('#messages').setAttribute('aria-busy',String(busy));
+  state.busy=busy; $('#new-chat').disabled=false; $('#messages').setAttribute('aria-busy',String(busy));
   $('#send-button').innerHTML=icon(busy?'stop':'arrow'); $('#send-button').setAttribute('aria-label',busy?'停止生成':'发送问题');
   $('#send-button').classList.toggle('is-stop',busy);
   $('#composer-hint').innerHTML=busy?`${icon('clock')}正在回答 · 点击方块停止`:`${icon('book')}好味道，从一个问题开始`;
@@ -79,10 +79,21 @@ function setBusy(busy) {
 function userMessage(question) {const row=document.createElement('article'); row.className='message user'; const bubble=document.createElement('div'); bubble.className='user-bubble'; bubble.textContent=question; row.append(bubble); $('#messages').append(row);}
 function assistantFrame() {const row=document.createElement('article'); row.className='message assistant'; row.innerHTML=`<div class="assistant-heading"><span class="assistant-avatar">${icon('pot')}</span><strong>好好吃饭</strong><span>你的厨房小帮手</span></div><div class="answer-body"></div>`; $('#messages').append(row); return row;}
 function bindCitations(element,sources) {element.querySelectorAll('[data-source-id]').forEach(button=>{const source=sources.find(s=>s.id===button.dataset.sourceId); if(source) button.onclick=()=>openRecipe(source); else button.disabled=true;});}
+function visibleAnswer(answer) {return String(answer || '').split('\n\n文档来源：')[0].replace(/\s*\[S\d+\]/gi,'');}
+function recommendationTopic(question) {if(/早餐/.test(question)) return 'breakfast'; if(/清淡/.test(question)) return 'light'; if(/饮品|饮料|喝什么/.test(question)) return 'drinks'; if(/简单|快手/.test(question)) return 'quick'; if(/晚餐/.test(question)) return 'dinner'; return null;}
+function saveSeen() {try{localStorage.setItem('cook-recommend-seen',JSON.stringify(state.seen));}catch{}}
+function stopGeneration() {
+  const turn=state.turn, chatId=turn?.chatId || state.chatId;
+  state.observer=null;
+  if(turn){turn.stopped=true; clearTimeout(turn.renderTimer); turn.controller.abort();
+    if(turn.row) paintAnswer(turn.row,{...turn.info,answer:turn.answer},'stopped',turn.question,turn.topic);}
+  state.turn=null; state.controller=null; setBusy(false);
+  if(chatId) api('/chats/'+chatId+'/stop',{method:'POST'}).catch(()=>notify('停止请求未送达，请检查服务连接。'));
+}
 function paintText(row,answer,sources=[],live=false) {
   const body=row.querySelector('.answer-body'); let content=body.querySelector('.markdown');
   if(!content) {body.replaceChildren(); content=document.createElement('div'); content.className='markdown'; body.append(content);}
-  content.innerHTML=markdown(String(answer || '').split('\n\n文档来源：')[0]);
+  content.innerHTML=markdown(visibleAnswer(answer));
   content.classList.toggle('streaming-text',live); bindCitations(content,sources);
 }
 function imageCard(source,button) {
@@ -96,15 +107,15 @@ function paintAnswer(row,data,status='complete',question='',topic=null) {
   const body=row.querySelector('.answer-body'); body.replaceChildren(); const sources=data.sources || [];
   paintText(row,data.answer,sources);
   if(sources.length) {
-    const section=document.createElement('section'); section.className='sources'; section.innerHTML=`<div class="sources-label">${icon('book')}食谱来源 · 点击查看原文</div>`;
+    const section=document.createElement('details'); section.className='sources'; section.innerHTML=`<summary class="sources-label">${icon('book')}查看食谱依据 · ${sources.length} 份原文</summary>`;
     if(data.kind==='recommendation') {const grid=document.createElement('div'); grid.className='recipe-card-grid'; grid.classList.toggle('without-photos',sources.every(s=>!s.image?.url));
       for(const source of sources) {const card=document.createElement('button'); card.className='recipe-card'; imageCard(source,card);
         const label=document.createElement('div'); label.className='recipe-card-label'; label.innerHTML=`<strong>${escapeHtml(source.title)}</strong><small>${escapeHtml(source.image?.url?source.image.label:'查看原文')} ${icon('chevron')}</small>`; card.append(label); card.onclick=()=>openRecipe(source); grid.append(card);} section.append(grid);
-    } else {const chips=document.createElement('div'); chips.className='source-chips'; for(const source of sources) {const button=document.createElement('button'); button.className='source-chip'; button.innerHTML=`<small>${escapeHtml(source.id)}</small>${escapeHtml(source.title)}${icon('chevron')}`; button.onclick=()=>openRecipe(source); chips.append(button);} section.append(chips);}
+    } else {const chips=document.createElement('div'); chips.className='source-chips'; for(const source of sources) {const button=document.createElement('button'); button.className='source-chip'; button.innerHTML=`${escapeHtml(source.title)}${icon('chevron')}`; button.onclick=()=>openRecipe(source); chips.append(button);} section.append(chips);}
     body.append(section);
   }
   const actions=document.createElement('div'); actions.className='answer-actions';
-  const copy=document.createElement('button'); copy.className='text-button'; copy.innerHTML=icon('copy')+'复制回答'; copy.onclick=async()=>{try{await navigator.clipboard.writeText(data.answer || ''); notify('回答已复制');}catch{notify('可以选中文字复制。');}}; actions.append(copy);
+  const copy=document.createElement('button'); copy.className='text-button'; copy.innerHTML=icon('copy')+'复制回答'; copy.onclick=async()=>{try{await navigator.clipboard.writeText(visibleAnswer(data.answer)); notify('回答已复制');}catch{notify('可以选中文字复制。');}}; actions.append(copy);
   if(status!=='complete') {const note=document.createElement('span'); note.className='incomplete-note'; note.textContent=status==='streaming'?'正在生成…':status==='stopped'?'已停止生成':status==='interrupted'?'服务重启，回答未完成':'回答未完成'; actions.append(note);}
   if(question) {const retry=document.createElement('button'); retry.className='text-button'; retry.innerHTML=icon('arrow')+'重新回答'; retry.onclick=()=>sendQuestion(question,topic); actions.append(retry);}
   body.append(actions);
@@ -144,15 +155,15 @@ function renderHistory() {
 }
 async function refreshHistory() {try{state.chats=(await api('/chats'+(state.trash?'?trash=true':''))).chats; renderHistory();}catch(error){$('#chat-list').textContent=error.message;}}
 async function openChat(id) {
-  if(state.busy) return notify('请先停止当前回答，再切换对话。');
+  if(state.busy) stopGeneration();
   try {let chat=await api('/chats/'+id); selectId(id); paintChat(chat); renderHistory(); closeSidebar();
-    if(chat.generating){setBusy(true);
-      try{while(chat.generating){await new Promise(resolve=>setTimeout(resolve,1000)); chat=await api('/chats/'+id); paintChat(chat,false);}}
-      finally{setBusy(false); await refreshHistory();}
+    if(chat.generating){setBusy(true); state.observer=id;
+      try{while(chat.generating && state.observer===id && state.chatId===id){await new Promise(resolve=>setTimeout(resolve,500)); if(state.observer!==id) break; chat=await api('/chats/'+id); if(state.observer===id) paintChat(chat,false);}}
+      finally{if(state.observer===id){state.observer=null; setBusy(false);} await refreshHistory();}
     }
   }catch(error){notify(error.message);}
 }
-function newChat(quiet=false) {if(state.busy) return notify('请先停止当前回答。'); selectId(null); state.messages=[]; $('#messages').replaceChildren(); $('#messages').hidden=true; $('#welcome').hidden=false; $('#question').value=''; resizeInput(); renderHistory(); closeSidebar(); $('#scroll-area').scrollTop=0; if(!quiet) notify('新的对话，新的好味道。'); $('#question').focus();}
+function newChat(quiet=false) {if(state.busy) stopGeneration(); state.observer=null; selectId(null); state.messages=[]; $('#messages').replaceChildren(); $('#messages').hidden=true; $('#welcome').hidden=false; $('#question').value=''; resizeInput(); renderHistory(); closeSidebar(); $('#scroll-area').scrollTop=0; if(!quiet) notify('新的对话，新的好味道。'); $('#question').focus();}
 async function deleteChat(id) {if(state.busy) return notify('请先停止生成。'); try{await api('/chats/'+id,{method:'DELETE'}); if(state.chatId===id) newChat(true); await refreshHistory(); notify('对话已移到最近删除。',{label:'撤销',run:()=>restoreChat(id)});}catch(error){notify(error.message);}}
 async function restoreChat(id) {try{await api('/chats/'+id+'/restore',{method:'POST'}); state.trash=false; await refreshHistory(); await openChat(id); notify('对话已恢复。');}catch(error){notify(error.message);}}
 async function openRecipe(source) {
@@ -173,40 +184,50 @@ async function readEvents(response,onEvent) {
 }
 async function sendQuestion(value,topic=null) {
   const question=String(value).trim(); if(!question) return $('#question').focus(); if(state.busy) return notify('上一份回答正在准备中，可以先停止生成。'); if(question.length>2000) return notify('问题请控制在 2000 字以内。');
-  closeSidebar(); state.autoScroll=true; let row,answer='',info={sources:[],kind:'answer'},done=false,stopped=false;
-  setBusy(true); state.controller=new AbortController(); $('#question').value=''; resizeInput();
-  try{
-    if(!state.chatId) {const chat=await api('/chats',{method:'POST'}); selectId(chat.id);}
-    $('#welcome').hidden=true; $('#messages').hidden=false; userMessage(question); row=assistantFrame(); row.querySelector('.answer-body').innerHTML='<div class="thinking"><span class="thinking-dots"><i></i><i></i><i></i></span><span>正在查找食谱…</span></div>'; scrollEnd();
-    const response=await fetch('/ask/stream',{method:'POST',headers:headers(),signal:state.controller.signal,body:JSON.stringify({question,chat_id:state.chatId,...(topic?{topic}:{})})});
+  topic=topic || recommendationTopic(question);
+  const turn={question,topic,chatId:state.chatId,controller:new AbortController(),row:null,answer:'',info:{sources:[],kind:'answer'},done:false,stopped:false,renderTimer:null};
+  state.turn=turn; state.controller=turn.controller; closeSidebar(); state.autoScroll=true; setBusy(true); $('#question').value=''; resizeInput();
+  try {
+    if(!turn.chatId){const chat=await api('/chats',{method:'POST'}); turn.chatId=chat.id; if(turn.stopped) return; selectId(chat.id);}
+    if(turn.stopped) return;
+    $('#welcome').hidden=true; $('#messages').hidden=false; userMessage(question); turn.row=assistantFrame(); turn.row.querySelector('.answer-body').innerHTML='<div class="thinking"><span class="thinking-dots"><i></i><i></i><i></i></span><span>正在查找食谱…</span></div>'; scrollEnd();
+    const key=topic || question;
+    const response=await fetch('/ask/stream',{method:'POST',headers:headers(),signal:turn.controller.signal,body:JSON.stringify({question,chat_id:turn.chatId,exclude_ids:state.seen[key] || [],...(topic?{topic}:{})})});
     if(!response.ok){if(response.status===401) $('#settings-dialog').showModal(); throw new Error(friendlyError(response.status));}
     await readEvents(response,(name,data)=>{
-      if(name==='start'){refreshHistory();}
-      else if(name==='metadata'){info={...data,topic:data.topic || topic};}
-      else if(name==='delta'){answer+=data.text; if(!renderTimer) renderTimer=setTimeout(()=>{renderTimer=null; paintText(row,answer,info.sources,true); scrollEnd();},60);}
-      else if(name==='done'){done=true; clearTimeout(renderTimer); renderTimer=null; answer=data.answer; info={...data,topic:data.topic || topic}; paintAnswer(row,info,'complete',question,info.topic); scrollEnd();}
+      if(turn.stopped || state.turn!==turn) return;
+      if(name==='start') refreshHistory();
+      else if(name==='metadata') turn.info={...data,topic:data.topic || topic};
+      else if(name==='delta'){turn.answer+=data.text; if(!turn.renderTimer) turn.renderTimer=setTimeout(()=>{turn.renderTimer=null; if(!turn.stopped && state.turn===turn){paintText(turn.row,turn.answer,turn.info.sources,true); scrollEnd();}},60);}
+      else if(name==='done'){turn.done=true; clearTimeout(turn.renderTimer); turn.answer=data.answer; turn.info={...data,topic:data.topic || topic}; paintAnswer(turn.row,turn.info,'complete',question,turn.info.topic); scrollEnd();
+        if(data.kind==='recommendation'){const seenKey=data.topic || key; const previous=data.recommendation_reset?[]:(state.seen[seenKey] || []); state.seen[seenKey]=[...new Set([...previous,...data.sources.map(source=>source.document_id)])].slice(-500); saveSeen();}}
       else if(name==='error') throw new Error(data.message);
     });
-    if(!done) throw new Error('连接中断，回答未完成。');
-  }catch(error){clearTimeout(renderTimer); renderTimer=null;
-    stopped=error.name==='AbortError';
-    if(row){paintAnswer(row,{...info,answer},stopped?'stopped':'error',question,topic);
-      if(!stopped){const note=document.createElement('div'); note.className='error-message'; note.textContent=error instanceof TypeError?'连接中断，请确认服务正在运行。':error.message; row.querySelector('.answer-body').append(note);}}
-    else notify(error.message);
-  }finally{clearTimeout(renderTimer); renderTimer=null; state.controller=null;
-    if(stopped && state.chatId){$('#composer-hint').innerHTML=icon('clock')+'正在结束上一轮回答…'; $('#send-button').disabled=true;
-      for(let attempt=0;attempt<60;attempt++){try{const chat=await api('/chats/'+state.chatId); if(!chat.generating) break;}catch{break;} await new Promise(resolve=>setTimeout(resolve,500));}
-      $('#send-button').disabled=false;
-    }
-    setBusy(false); await refreshHistory(); scrollEnd(); $('#question').focus();}
+    if(!turn.done && !turn.stopped) throw new Error('连接中断，回答未完成。');
+  }catch(error){clearTimeout(turn.renderTimer);
+    if(!turn.stopped){if(turn.row){paintAnswer(turn.row,{...turn.info,answer:turn.answer},'error',question,topic); const note=document.createElement('div'); note.className='error-message'; note.textContent=error instanceof TypeError?'连接中断，请确认服务正在运行。':error.message; turn.row.querySelector('.answer-body').append(note);} else notify(error.message);}
+  }finally{clearTimeout(turn.renderTimer);
+    if(state.turn===turn){state.turn=null; state.controller=null; setBusy(false); scrollEnd(); $('#question').focus();}
+    refreshHistory();
+  }
+}
+async function loadSuggestions() {
+  const button=$('#refresh-suggestions'); button.disabled=true;
+  try{const data=await api('/suggestions',{method:'POST',body:JSON.stringify({exclude_ids:state.suggested})});
+    const cards=[...document.querySelectorAll('.starter-card')];
+    const labels={breakfast:'早餐，吃点好的',light:'今天想清淡一点',quick:'学一道拿手好菜'};
+    data.suggestions.forEach((item,index)=>{const card=cards[index]; if(!card) return; card.dataset.question=item.question; delete card.dataset.topic; card.querySelector('strong').textContent=item.title; card.querySelector('p').textContent=labels[item.topic]; card.querySelector('.card-link').innerHTML='看看怎么做 '+icon('chevron');});
+    state.suggested=[...new Set([...(data.reset_topics.length?[]:state.suggested),...data.suggestions.map(item=>item.document_id)])].slice(-500);
+    state.suggestionsLoaded=true; try{localStorage.setItem('cook-home-seen',JSON.stringify(state.suggested));}catch{}
+  }catch(error){notify(error.message);}finally{button.disabled=false;}
 }
 async function checkHealth() {
   try{const response=await fetch('/health',{signal:AbortSignal.timeout(15000)}); const data=await response.json(); const ok=response.ok && data.status==='ready';
     $('#service-status').className='service-status '+(ok?'online':'offline'); $('#service-status').innerHTML=`<span></span>${ok?'食谱助手已就绪':'暂时未就绪'}`;
-    if(ok){$('#recipe-count').textContent=data.recipes+' 份食谱'; $('#connection-settings').hidden=!data.auth_required;}
+    if(ok){$('#recipe-count').textContent=data.recipes+' 份食谱'; $('#connection-settings').hidden=!data.auth_required; if(!state.suggestionsLoaded) loadSuggestions();}
   }catch{$('#service-status').className='service-status offline'; $('#service-status').innerHTML='<span></span>连接暂时中断';}
 }
-$('#ask-form').addEventListener('submit',event=>{event.preventDefault(); if(state.busy){state.controller?.abort(); if(state.chatId) api('/chats/'+state.chatId+'/stop',{method:'POST'}).catch(()=>{});} else sendQuestion($('#question').value);});
+$('#ask-form').addEventListener('submit',event=>{event.preventDefault(); if(state.busy){stopGeneration();} else sendQuestion($('#question').value);});
 $('#question').addEventListener('input',resizeInput); $('#question').addEventListener('keydown',event=>{if(event.key==='Enter' && !event.shiftKey && !event.isComposing && event.keyCode!==229){event.preventDefault(); if(!state.busy) sendQuestion(event.currentTarget.value);}});
 document.querySelectorAll('[data-question]').forEach(button=>button.onclick=()=>sendQuestion(button.dataset.question,button.dataset.topic || null));
 $('#new-chat').onclick=()=>newChat(); $('#history-search').oninput=renderHistory; $('#show-trash').onclick=()=>{state.trash=!state.trash; refreshHistory();};
@@ -217,7 +238,9 @@ $('#settings-form').onsubmit=event=>{event.preventDefault(); state.key=$('#api-k
 $('#rename-form').onsubmit=async event=>{event.preventDefault(); try{await api('/chats/'+state.renameId,{method:'PATCH',body:JSON.stringify({title:$('#chat-name').value})}); $('#rename-dialog').close(); await refreshHistory();}catch(error){notify(error.message);}};
 $('#scroll-area').addEventListener('scroll',()=>{const area=$('#scroll-area'); state.autoScroll=area.scrollHeight-area.scrollTop-area.clientHeight<90; $('#jump-bottom').hidden=state.autoScroll || $('#messages').hidden;},{passive:true}); $('#jump-bottom').onclick=()=>{state.autoScroll=true; scrollEnd(true);};
 for(const dialog of document.querySelectorAll('dialog')) dialog.addEventListener('click',event=>{if(event.target===dialog){const rect=dialog.getBoundingClientRect(); if(event.clientX<rect.left || event.clientX>rect.right || event.clientY<rect.top || event.clientY>rect.bottom) dialog.close();}});
+$('#refresh-suggestions').onclick=loadSuggestions;
 async function boot(){
+  try{state.suggested=JSON.parse(localStorage.getItem('cook-home-seen') || '[]'); state.seen=JSON.parse(localStorage.getItem('cook-recommend-seen') || '{}');}catch{}
   try{state.key=sessionStorage.getItem('cook-key') || ''; state.chatId=localStorage.getItem('cook-active-chat');}catch{}
   await refreshHistory(); await checkHealth();
   if(!state.chatId){try{const old=JSON.parse(sessionStorage.getItem('cook-chat') || 'null'); const turns=[]; let question='';

@@ -8,6 +8,7 @@ import re
 import secrets
 import threading
 import time
+import random
 from typing import Literal
 from uuid import UUID
 from fastapi import Header, Request, Response
@@ -19,6 +20,8 @@ from rag_modules.conversation import ConversationMemory
 from rag_modules.dialogue_intent import is_recommendation
 from rag_modules.dialogue_intent import direct_intent
 from rag_modules.sources import references
+from rag_modules.recipe_preferences import light_evidence
+from rag_modules.cancellation import stop_signal
 
 logger = logging.getLogger('cook_rag.web')
 COOKIE = 'cook_browser'
@@ -32,7 +35,8 @@ def menu_source_history(messages):
         elif message['role'] == 'assistant' and message['status'] == 'complete':
             names = {source['title'] for source in message['payload'].get('sources', []) if source.get('title')}
             if names:
-                yield question, message['content'].split('\n\n文档来源：')[0], names
+                yield question, message['content'].split('\n\n文档来源：')[0], names, {
+                    source['id']:source['title'] for source in message['payload']['sources'] if source.get('id')}
 
 
 def register_web_routes(app, config, settings, authenticate, Error, AskModel):
@@ -48,7 +52,36 @@ def register_web_routes(app, config, settings, authenticate, Error, AskModel):
 
     class StreamAsk(AskModel):
         chat_id: UUID
-        topic: Literal['breakfast', 'light', 'quick', 'dinner'] | None = None
+        topic: Literal['breakfast', 'light', 'quick', 'dinner', 'drinks'] | None = None
+        exclude_ids: list[str] = Field(default_factory=list, max_length=500)
+
+    class SuggestionRequest(BaseModel):
+        exclude_ids: list[str] = Field(default_factory=list, max_length=500)
+
+    @app.post('/suggestions')
+    def suggestions(body: SuggestionRequest, authorization: str | None = Header(default=None)):
+        authenticate(authorization)
+        if not app.state.ready: raise Error(503, 'not_ready', '食谱助手暂时未就绪。')
+        docs = app.state.system.data_module.documents
+        exclusions = set(body.exclude_ids)
+        selected, resets = [], []
+        for topic in ('breakfast', 'light', 'quick'):
+            pool = [doc for doc in docs if
+                    (topic == 'breakfast' and doc.metadata.get('category') == '早餐') or
+                    (topic == 'light' and light_evidence(doc)) or
+                    (topic == 'quick' and '简单' in doc.metadata.get('difficulty', '')
+                     and doc.metadata.get('category') in {'早餐','主食','素菜','荤菜','汤品','水产'})]
+            chosen_ids = {item['document_id'] for item in selected}
+            pool = [doc for doc in pool if doc.metadata['parent_id'] not in chosen_ids]
+            available = [doc for doc in pool if doc.metadata['parent_id'] not in exclusions]
+            if not available:
+                available = pool
+                if pool: resets.append(topic)
+            if available:
+                doc = random.SystemRandom().choice(available)
+                selected.append({**references([doc])[0], 'topic':topic,
+                                 'question':doc.metadata['dish_name']+'怎么做'})
+        return {'suggestions':selected, 'reset_topics':resets}
 
     class EditChat(BaseModel):
         title: str = Field(min_length=1, max_length=60)
@@ -207,6 +240,7 @@ def register_web_routes(app, config, settings, authenticate, Error, AskModel):
             return False
 
         def worker():
+            cancel_token = stop_signal.set(cancelled)
             lock = app.state.engine_lock
             acquired = False
             answer_id = None
@@ -236,9 +270,10 @@ def register_web_routes(app, config, settings, authenticate, Error, AskModel):
                 shortcuts = {'早餐吃什么': 'breakfast', '晚餐我想吃得清淡点，有什么推荐': 'light',
                              '推荐三道简单易做的主食': 'quick', '晚餐吃什么': 'dinner'}
                 topic = body.topic or shortcuts.get(body.question)
-                key = topic or (body.question if is_recommendation(body.question) else None)
+                if not topic and is_recommendation(body.question) and re.search(r'饮品|饮料|喝什么', body.question): topic = 'drinks'
+                key = (topic or body.question) if is_recommendation(body.question) else None
                 seen = {} if body.reset else current['seen']
-                exclusions = seen.get(key, []) if key else []
+                exclusions = list(dict.fromkeys(seen.get(key, []) + body.exclude_ids)) if key else []
                 kwargs = {'stream': True, 'strategy': body.strategy, 'memory': memory, 'result_info': info}
                 if exclusions:
                     kwargs['exclude_ids'] = exclusions
@@ -269,10 +304,11 @@ def register_web_routes(app, config, settings, authenticate, Error, AskModel):
                 emit('done', {**info, 'answer': complete, 'chat_id': chat_id,
                               'message_id': answer_id, 'request_id': request_id})
             except Exception as exc:
-                logger.error('Streaming generation failed', extra={'request_id': request_id,
-                                                                  'error_type': type(exc).__name__})
+                if not cancelled.is_set():
+                    logger.error('Streaming generation failed', extra={'request_id': request_id,
+                                                                      'error_type': type(exc).__name__})
                 if answer_id:
-                    store.finish(user, chat_id, answer_id, ''.join(parts), 'error', info)
+                    store.finish(user, chat_id, answer_id, ''.join(parts), 'stopped' if cancelled.is_set() else 'error', info)
                 emit('error', {'code': 'backend_error', 'message': '这次回答未能完成，可以重试。'})
             finally:
                 if iterator is not None and hasattr(iterator, 'close'):
@@ -285,6 +321,7 @@ def register_web_routes(app, config, settings, authenticate, Error, AskModel):
                 with active_lock:
                     app.state.active_chats.discard(chat_id)
                     app.state.stream_cancellations.pop(chat_id, None)
+                stop_signal.reset(cancel_token)
                 emit('end', {})
 
         async def response_events():

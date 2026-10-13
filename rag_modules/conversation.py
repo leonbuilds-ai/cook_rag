@@ -6,6 +6,7 @@ import unicodedata
 from difflib import SequenceMatcher
 from dataclasses import dataclass
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
+from .cancellation import invoke as cancellable_invoke
 
 
 NUMBERS = {'一': 1, '二': 2, '两': 2, '三': 3, '四': 4, '五': 5,
@@ -76,12 +77,13 @@ def extract_options(answer, names):
         if hits:
             options[number(match[1])] = MenuOption(match[2].strip('* ')[:120], hits)
     if not options:
-        for line in answer.splitlines():
-            match = re.match(r'^\s{0,3}' + numbered, line)
-            if match:
-                hits = tuple(mentioned_names(match[2], names))
-                if hits:
-                    options[number(match[1])] = MenuOption(match[2].strip('* ')[:120], hits)
+        entries = list(re.finditer(r'(?m)^\s{0,3}' + numbered + r'$', answer))
+        for index, match in enumerate(entries):
+            end = entries[index+1].start() if index+1 < len(entries) else len(answer)
+            next_heading = next((header.start() for header in headers if match.end() < header.start() < end), end)
+            hits = tuple(mentioned_names(answer[match.start():next_heading], names))
+            if hits:
+                options[number(match[1])] = MenuOption(match[2].strip('* ')[:120], hits)
     return options
 
 
@@ -103,16 +105,19 @@ class ConversationMemory:
         # Keep compact recommendation anchors independently of long follow-up answers.
         self.menus = []
         self.pending_recipe = None
+        self.source_choices = {}
 
     def clear(self):
         self.turns.clear()
         self.menus.clear()
         self.pending_recipe = None
+        self.source_choices.clear()
 
     def snapshot(self):
         return {'turns': [{'question': t.question, 'answer': t.answer, 'choices': t.choices} for t in self.turns],
                 'menus': [{str(k): {'title': v.title, 'recipes': list(v.recipes)} for k, v in m.items()}
-                          for m in self.menus], 'pending_recipe': self.pending_recipe}
+                          for m in self.menus], 'pending_recipe': self.pending_recipe,
+                'source_choices': self.source_choices}
 
     def restore(self, state, source_history=()):
         self.turns = [Turn(t['question'], t['answer'], {int(k): v for k, v in t['choices'].items()})
@@ -120,11 +125,14 @@ class ConversationMemory:
         self.menus = [{int(k): MenuOption(v['title'], tuple(v['recipes'])) for k, v in m.items()}
                       for m in state.get('menus', [])][-self.max_turns:]
         self.pending_recipe = state.get('pending_recipe')
+        self.source_choices = dict(state.get('source_choices', {}))
         # Repair older persisted menus from completed answers and their own
         # provenance, never from arbitrary library or retrieval ranking.
-        for question, answer, names in source_history:
+        for record in source_history:
+            question, answer, names = record[:3]
             options = recommendation_options(question, answer, names)
             if options:
+                if len(record) > 3: self.source_choices = dict(record[3])
                 self.menus = [menu for menu in self.menus if not all(
                     index in options and option == options[index] for index, option in menu.items())]
                 self.menus.append(options)
@@ -143,7 +151,7 @@ class ConversationMemory:
             remaining -= len(question) + len(answer)
         return [message for pair in reversed(pairs) for message in pair]
 
-    def remember(self, question, answer, docs):
+    def remember(self, question, answer, docs, sources=None):
         names = {d.metadata['dish_name'] for d in docs if d.metadata.get('dish_name')}
         # Detect names in the answer, never use retrieval ranking as the displayed list order.
         mentioned = mentioned_names(answer, names)
@@ -151,6 +159,10 @@ class ConversationMemory:
         choices = {index: option.recipes[0] for index, option in options.items() if len(option.recipes) == 1}
         menu = recommendation_options(question, answer, names)
         if menu:
+            if sources is None:
+                from .sources import references
+                sources = references(docs)
+            self.source_choices = {source['id']: source['title'] for source in sources}
             self.menus.append(menu)
             self.menus = self.menus[-self.max_turns:]
         if not choices:
@@ -173,6 +185,12 @@ class ConversationMemory:
         return FollowUp(f'{names}怎么做？')
 
     def resolve(self, question, known_names, llm):
+        citation = re.fullmatch(r'\s*(?:选择|我选|选)?\s*\[?[sS]\s*(\d+)\]?\s*(怎么做|的做法|做法)?[？?。!！]?\s*', question)
+        if citation:
+            name = self.source_choices.get(f'S{int(citation[1])}')
+            if not name:
+                return FollowUp(question, '找不到这份推荐中的来源编号，请告诉我菜名或推荐选项编号。')
+            return FollowUp(f'{name}怎么做？')
         if self.pending_recipe:
             pending = self.pending_recipe
             self.pending_recipe = None
@@ -245,7 +263,7 @@ class ConversationMemory:
 引用旧推荐的标题或编号时，应使用对应旧选项，不能默认绑定最近讨论的菜。
 已保留的推荐列表映射：\n''' + self.reference_summary())
         try:
-            response = llm.invoke([prompt, *self.messages(), HumanMessage(content=question)])
+            response = cancellable_invoke(llm, [prompt, *self.messages(), HumanMessage(content=question)])
             text = response.content.strip()
             if len(text) > 1500:
                 raise ValueError('Follow-up output is not a compact query')

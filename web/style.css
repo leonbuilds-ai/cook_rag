@@ -70,3 +70,6 @@
 .jump-bottom svg{width:17px;height:17px;transform:rotate(180deg)}
 .toast button{border:0;background:none;color:#e8c49d;margin-left:15px;font-size:12px;text-decoration:underline;text-underline-offset:3px}
 @media(max-width:720px){.history-control{opacity:1!important}.recipe-card-grid{gap:7px}.recipe-card-label{padding:9px}.recipe-card-label strong{font-size:11px}.recipe-card-label small{font-size:8px}.sources{padding:12px}.jump-bottom{left:calc(50% - 17px);bottom:170px}.sidebar .brand{margin-bottom:20px}}
+details.sources > summary {cursor:pointer; list-style:none; padding:8px 0;}
+details.sources > summary::after {content:'展开'; margin-left:auto; color:var(--muted); font-size:12px;}
+details.sources[open] > summary::after {content:'收起';}

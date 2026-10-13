@@ -9,6 +9,7 @@ from typing import List
 from langchain_core.prompts import ChatPromptTemplate, PromptTemplate
 from langchain_ollama import ChatOllama
 from .model_clients import create_llm
+from .cancellation import stop_signal, stream as cancellable_stream
 from langchain_core.documents import Document
 from langchain_core.runnables import RunnablePassthrough
 from langchain_core.output_parsers import StrOutputParser
@@ -53,6 +54,12 @@ class GenerationIntegrationModule:
         )
         
         logger.info("LLM初始化完成")
+
+    def request_llm(self):
+        if stop_signal.get() is None: return self.llm
+        return create_llm(self.config) if self.config else ChatOllama(
+            model=self.model_name, base_url=self.base_url, temperature=self.temperature,
+            num_predict=self.max_tokens, num_ctx=self.num_ctx, reasoning=False)
     
     def generate_basic_answer(self, query: str, context_docs: List[Document], history=None) -> str:
         """
@@ -336,15 +343,15 @@ class GenerationIntegrationModule:
 
 回答:""")
 
+        model = self.request_llm()
         chain = (
             {"question": RunnablePassthrough(), "context": lambda _: context, "history": lambda _: history_text}
             | prompt
-            | self.llm
+            | model
             | StrOutputParser()
         )
 
-        for chunk in chain.stream(query):
-            yield chunk
+        yield from cancellable_stream(chain, query, model)
 
     def generate_step_by_step_answer_stream(self, query: str, context_docs: List[Document], history=None):
         """
@@ -399,15 +406,15 @@ class GenerationIntegrationModule:
 
 回答:""")
 
+        model = self.request_llm()
         chain = (
             {"question": RunnablePassthrough(), "context": lambda _: context, "history": lambda _: history_text}
             | prompt
-            | self.llm
+            | model
             | StrOutputParser()
         )
 
-        for chunk in chain.stream(query):
-            yield chunk
+        yield from cancellable_stream(chain, query, model)
 
     @staticmethod
     def _format_history(history):

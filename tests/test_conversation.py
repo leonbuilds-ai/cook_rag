@@ -76,6 +76,20 @@ class MemoryTests(unittest.TestCase):
         self.assertIn('冬瓜茶',self.memory.resolve('3',[],self.llm).query)
         self.assertTrue(self.memory.resolve('2',[],self.llm).clarification)
 
+    def test_source_labels_are_independent_of_group_numbers_and_retrieval(self):
+        names=['冬瓜茶','酸梅汤','百香果橙子特调','金菲士','柠檬水']
+        answer='1. 传统消暑\n- 冬瓜茶 [S1]\n- 酸梅汤 [S2]\n2. 清新特调\n- 百香果橙子特调 [S3]\n- 金菲士 [S4]\n3. 简单快捷\n- 柠檬水 [S5]'
+        sources=[{'id':f'S{i}','title':name} for i,name in enumerate(names,1)]
+        self.memory.remember('想喝点饮品',answer,[recipe(n) for n in reversed(names)],sources)
+        self.memory.remember('S4','金菲士的做法',[recipe('金菲士')],[{'id':'S1','title':'金菲士'}])
+        restored=ConversationMemory().restore(self.memory.snapshot())
+        for question in ('S4','s4','[S4]','选S4','S4怎么做'):
+            self.assertEqual(restored.resolve(question,[],self.llm).query,'金菲士怎么做？')
+        self.assertTrue(restored.resolve('S9',[],self.llm).clarification)
+        self.llm.invoke.assert_not_called()
+        restored.clear()
+        self.assertTrue(restored.resolve('S4',[],self.llm).clarification)
+
     def test_explicit_numbers_and_markdown_heading(self):
         self.memory.remember('推荐几个菜', '### 1. **麻婆豆腐**\n### 3. **西红柿炒鸡蛋**', self.docs)
         self.assertIn('西红柿炒鸡蛋', self.memory.resolve('第3道', [], self.llm).query)
