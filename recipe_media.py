@@ -22,7 +22,9 @@ class RecipeMedia:
                 or (header.startswith(b'RIFF') and header[8:12] == b'WEBP'))
 
     def file_for(self, source):
-        relative = canonical_source(source).removeprefix('data/cook/')
+        canonical = canonical_source(source)
+        if not canonical.startswith('data/cook/'): return None
+        relative = canonical.removeprefix('data/cook/')
         path = (self.root / relative).resolve()
         return path if path.is_relative_to(self.root) and path.suffix == '.md' and path.is_file() else None
 
@@ -54,6 +56,8 @@ class RecipeMedia:
     def rewrite(self, source, content):
         recipe = self.file_for(source)
         if not recipe:
+            if str(source).startswith('upload:'):
+                return re.sub(r'!\[([^\]]*)\]\(([^)]+)\)', lambda m:f'【图片：{m[1] or "原文配图"}，未上传】', content)
             return content
         def substitute(match):
             path = self.local_image(recipe.parent, match[2])

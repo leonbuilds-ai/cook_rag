@@ -1,0 +1,63 @@
+{
+  "profile": {
+    "ragas": "0.3.9",
+    "judge": "qwen3.5:9b",
+    "endpoint": "http://localhost:11434/v1",
+    "embedding": "qwen3-embedding:8b",
+    "embedding_endpoint": "http://127.0.0.1:11434/v1",
+    "temperature": 0.1,
+    "max_tokens": 2048,
+    "num_ctx": 16384,
+    "provider": "ollama",
+    "metrics": [
+      "faithfulness",
+      "answer_relevancy",
+      "context_precision",
+      "context_recall"
+    ],
+    "strictness": 1,
+    "judge_prompt": "json_instance_v2",
+    "schema": 2
+  },
+  "samples": 3,
+  "cache_hits": 3,
+  "elapsed_seconds": 0.012,
+  "summary": {
+    "faithfulness": 1.0,
+    "answer_relevancy": 0.8633348267722271,
+    "context_precision": 0.9999999999,
+    "context_recall": 1.0
+  },
+  "results": [
+    {
+      "question": "葱油拌面一份干面条要多少克？",
+      "scores": {
+        "faithfulness": 1.0,
+        "context_recall": 1.0,
+        "answer_relevancy": 0.8958384539741744,
+        "context_precision": 0.9999999999
+      },
+      "cache_hit": true
+    },
+    {
+      "question": "蒜蓉空心菜需要哪些食材？",
+      "scores": {
+        "faithfulness": 1.0,
+        "context_recall": 1.0,
+        "answer_relevancy": 0.9133460412965982,
+        "context_precision": 0.9999999999
+      },
+      "cache_hit": true
+    },
+    {
+      "question": "蒸花卷需要多少水、蒸多久？",
+      "scores": {
+        "faithfulness": 1.0,
+        "context_recall": 1.0,
+        "answer_relevancy": 0.7808199850459082,
+        "context_precision": 0.9999999999
+      },
+      "cache_hit": true
+    }
+  ]
+}

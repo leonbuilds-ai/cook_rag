@@ -36,3 +36,40 @@
 ```
 
 修改语料或标注后重新评估，报告会记录新的哈希。继续调参应使用开发集，再建立新的未参与调参的测试集。`settings.toml` 的 `retrieval_mode` 或环境变量 `RETRIEVAL_MODE` 可选 `recipe`（默认）或 `baseline`，切换不需要重建向量。
+
+## Cross-Encoder 对照 · 2026-10-13
+
+[原始三组结果](../evaluation/results-reranked.json) 在同一份 322 食谱 / 1761 块语料上运行，沿用 24 条标注。所用模型为 `cross-encoder/mmarco-mMiniLMv2-L12-H384-v1`，对 RRF 筛选后的候选执行真实 query / passage 推理。未生效的重排不能通过评估。
+
+| 范围 | baseline Recall / MRR | recipe RRF Recall / MRR | Cross-Encoder Recall / MRR |
+| --- | --- | --- | --- |
+| 全部 24 条 | 1.000000 / 0.925000 | 1.000000 / 0.958333 | 0.979167 / 0.951389 |
+| 开发 12 条 | 1.000000 / 0.958333 | 1.000000 / 1.000000 | 0.958333 / 1.000000 |
+| 测试 12 条 | 1.000000 / 0.891667 | 1.000000 / 0.916667 | 1.000000 / 0.902778 |
+
+整体没有提升。开发问题“剩米饭加鸡蛋炒一下”遗漏了一份相关食谱；测试集中有提升和退步。当前默认 `RERANK_ENABLED=false`，需要进一步评估模型或训练再决定是否启用。延迟含当时 localhost 的 IPv6 回退等待，之后已切换 IPv4；不要用该报告比较系统吞吐。
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -r requirements-rerank.txt
+.\.venv\Scripts\python.exe evaluate.py --output evaluation/results-reranked.json
+```
+
+脚本会实际启用重排作对照，独立于网站默认关闭的设置。当前多了一份上传示例，重跑将生成新的语料指纹。
+
+## Ragas 答案回放
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -r requirements-eval.txt
+# 首次为缺少答案或上下文的样本生成真实回答；已有完整样本保持冻结
+.\.venv\Scripts\python.exe evaluate_answers.py --capture --limit 3
+# 只评估已保存答案，不重新生成；同一样本与模型配置命中 SQL 分数缓存
+.\.venv\Scripts\python.exe evaluate_answers.py --limit 3 --output evaluation/answer-replay-results.json
+# 回放数据库中某段聊天的最后一条完整答案，必须提供人工参考答案
+.\.venv\Scripts\python.exe evaluate_answers.py --chat-id <对话UUID> --reference '人工参考答案'
+```
+
+四项指标是 faithfulness、answer_relevancy、context_precision、context_recall。使用实际生成上下文，包含父文档回填和预算裁剪；参考答案需人工给定。更换问题、答案、上下文、参考答案或评估模型配置会产生新的缓存键。
+
+本次 [样本](../evaluation/answer_samples.json) 为葱油拌面用量、蒜蓉空心菜食材、蒸花卷水量和时间。平均分依次为 1.000000、0.863335、约 1.000000、1.000000。[结果报告](../evaluation/answer-results.json) 保留逐条分数，[再次回放](../evaluation/answer-replay-results.json) 为 3/3 分数缓存命中，计分约 0.012 秒。这个时间不包含首次模型评估，不证明通用调用成本下降 30%。
+
+Ragas 0.3.9 使用 LangChain wrapper 对接 Ollama；该版本已提示 wrapper 弃用，当前固定版本以确保复现，后续升级需重新验证。三条样本规模很小，自动 judge 的高分也不能替代人工核对。

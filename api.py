@@ -99,6 +99,13 @@ def check_dependencies(system):
                                   system.index_module.collection_name,
                                   headers={'api-key': system.config.qdrant_api_key} if system.config.qdrant_api_key else {})
             response.raise_for_status()
+            probe = client.post(system.config.qdrant_url.rstrip('/') + '/collections/' + system.index_module.collection_name + '/points/scroll',
+                                json={'limit':1,'with_payload':True,'with_vector':True},
+                                headers={'api-key':system.config.qdrant_api_key} if system.config.qdrant_api_key else {})
+            probe.raise_for_status()
+            points = probe.json()['result']['points']
+            if not points or not points[0].get('payload') or not any(points[0].get('vector',[])):
+                raise ValueError('Qdrant data is not readable')
     def neo4j_probe():
         from neo4j import Query
         with system.data_module.driver.session(database=system.config.neo4j_database) as session:
@@ -137,12 +144,24 @@ def create_app(config=None, settings=None, system_factory=RecipeRAGSystem, depen
         app.state.ready = False
         system = None
         try:
+            app.state.chat_store.initialize()
+            if settings.database_url:
+                migration = app.state.chat_store.migrate_sqlite(settings.history_db_path)
+                logger.info('History migration complete', extra={'migration_counts':migration})
             app.state.chat_store.recover_interrupted()
             system = system_factory(config)
             app.state.system = system
             await asyncio.to_thread(system.initialize_system)
             await asyncio.to_thread(system.build_knowledge_base)
+            if settings.database_url:
+                await asyncio.to_thread(app.state.chat_store.sync_documents, system.data_module.documents)
+            if config.rerank_enabled:
+                try: await asyncio.to_thread(system.reranker.load)
+                except Exception as exc: logger.warning('Reranker startup fallback',extra={'error_type':type(exc).__name__})
             app.state.ready = True
+            from ingestion import IngestWorker
+            app.state.ingest_worker = IngestWorker(app, app.state.chat_store, app.state.redis)
+            await asyncio.to_thread(app.state.ingest_worker.start)
             logger.info('Knowledge base ready')
         except Exception as exc:
             logger.error('Startup failed', extra={'error_type': type(exc).__name__})
@@ -150,8 +169,11 @@ def create_app(config=None, settings=None, system_factory=RecipeRAGSystem, depen
             yield
         finally:
             app.state.ready = False
+            if hasattr(app.state,'ingest_worker'): await asyncio.to_thread(app.state.ingest_worker.close)
             if system is not None:
                 await asyncio.to_thread(system.close)
+            app.state.chat_store.close()
+            app.state.redis.close()
 
     app = FastAPI(title='Cook RAG', version='1.0.0', lifespan=lifespan)
     app.state.ready = False
@@ -207,7 +229,11 @@ def create_app(config=None, settings=None, system_factory=RecipeRAGSystem, depen
         if not app.state.ready:
             return JSONResponse(status_code=503, content={'status': 'not_ready', 'dependencies': {}})
         checks = dependency_probe(app.state.system)
-        ready = all(value in {'ok', 'configured'} for value in checks.values())
+        try: checks[app.state.chat_store.backend] = app.state.chat_store.ping()
+        except Exception: checks[app.state.chat_store.backend] = 'unavailable'
+        checks['redis'] = app.state.redis.ping()
+        if config.rerank_enabled: checks['reranker'] = 'ok' if app.state.system.reranker.status == 'ready' else 'configured'
+        ready = all(value in {'ok', 'configured', 'disabled'} for value in checks.values())
         return JSONResponse(status_code=200 if ready else 503, content={
             'status': 'ready' if ready else 'degraded', 'dependencies': checks,
             'recipes': len(app.state.system.data_module.documents),

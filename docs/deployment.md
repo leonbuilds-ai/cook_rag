@@ -18,6 +18,36 @@ docker run -d --name cook-qdrant -p 6333:6333 `
 
 ## 配置
 
+### 本地 Redis
+
+项目提供独立的 `compose.redis.yaml`。在 `.env` 设置 REDIS_PASSWORD 后启动：
+
+```powershell
+docker compose -p cook-rag-redis -f compose.redis.yaml up -d --wait
+docker exec cook-rag-redis redis-cli ping
+```
+
+容器名为 `cook-rag-redis`，端口只绑定 `127.0.0.1:6379`，开启密码认证与 AOF，数据保存到 `cook-rag-redis-data` 卷。`.env` 同时提供 REDIS_HOST、REDIS_PORT、REDIS_DB、REDIS_USERNAME、REDIS_PASSWORD 和 REDIS_URL。镜像使用 Docker 官方 Registry 的直接地址，避免本机镜像加速源返回非镜像内容。
+
+停止可用 `docker compose -p cook-rag-redis -f compose.redis.yaml stop`，再次执行 up 命令恢复。此服务独立于 Neo4j、Qdrant 和其他 Compose 项目。Redis 用于入库任务与缓存，网页历史使用 PostgreSQL。
+
+### PostgreSQL 与 Qdrant
+
+在 `.env` 设置 POSTGRES_USER、POSTGRES_DB、POSTGRES_PASSWORD 和 DATABASE_URL，密码保持一致：
+
+```powershell
+docker compose -p cook-rag-postgres -f compose.postgres.yaml up -d --wait
+docker compose -p cook-rag-qdrant -f compose.qdrant.yaml up -d
+```
+
+PostgreSQL 使用 `cook-rag-postgres-data` 卷，监听 `127.0.0.1:5432`。服务启动会创建初始表结构并导入旧 SQLite 聊天，保留旧文件。备份 PostgreSQL 可用 pg_dump；恢复前核对用户与数据库，业务历史不提交到 Git。
+
+Qdrant 专用实例为 `cook-rag-qdrant`，使用 `cook-rag-qdrant-data` 卷，宿主机地址是 `http://127.0.0.1:6335`。旧 6333 实例保留。Windows 上不要使用 NTFS 绑定目录保存 Qdrant 内存映射文件；本机原目录已经出现零向量与 OutputTooSmall 错误。使用明确 IPv4 地址也避免 localhost 的 IPv6 连接回退等待。
+
+安装 `requirements-rerank.txt` 后可以启用 RERANK_ENABLED，安装 `requirements-eval.txt` 后运行 Ragas。Cross-Encoder 模型首次需要下载，Windows 设置 HF_HOME 为项目 runtime/models，缓存不要打包到 Git。当前模型的对照表现略低于 RRF，所以默认关闭；评估脚本会单独启用真实重排做比较。
+
+### 项目参数
+
 优先顺序：进程环境变量 → 项目 `.env` → TOML / 代码默认值。`settings.toml` 相对数据和索引目录以项目根目录解析；自定义配置路径由 `RAG_CONFIG` 指定。直接构造 `RAGConfig(...)` 时参数用于该实例。
 
 | 环境变量 | 用途 | 默认 / 示例 |
@@ -29,7 +59,7 @@ docker run -d --name cook-qdrant -p 6333:6333 `
 | NEO4J_CONNECTION_TIMEOUT | 连接超时秒数 | 10 |
 | NEO4J_MAX_CONNECTION_POOL_SIZE | 连接池大小 | 50 |
 | NEO4J_MAX_CONNECTION_LIFETIME | 连接最大存活秒数 | 3600 |
-| QDRANT_URL | HTTP 地址 | http://localhost:6333 |
+| QDRANT_URL | HTTP 地址 | http://127.0.0.1:6335 |
 | QDRANT_API_KEY | Qdrant 密钥 | 本地无鉴权时留空 |
 | QDRANT_COLLECTION_NAME | 集合名前缀 | recipe_c9，实际名附数据指纹 |
 | LLM_MODEL_ID / EMBED_MODEL_NAME | 生成 / 嵌入模型 | qwen3.5:9b / qwen3-embedding:8b |
@@ -38,7 +68,10 @@ docker run -d --name cook-qdrant -p 6333:6333 `
 | LLM_API_KEY / EMBED_API_KEY | 兼容接口密钥 | 本地 Ollama 可写 ollama |
 | EMBED_BATCH_SIZE | 嵌入批次 | 8 |
 | API_HOST / API_PORT | 服务监听地址 | 127.0.0.1 / 8000 |
-| HISTORY_DB_PATH | 网页历史 SQLite 文件 | runtime/history.sqlite3 |
+| HISTORY_DB_PATH | 原历史备份 / SQLite 测试后端 | runtime/history.sqlite3 |
+| DATABASE_URL | SQLAlchemy 业务数据库 | postgresql+psycopg://用户:密码@127.0.0.1:5432/cookrag |
+| REDIS_URL | 队列与缓存 | redis://default:密码@127.0.0.1:6379/0 |
+| RERANK_ENABLED / RERANK_MODEL | 可选真实重排 | false / cross-encoder/mmarco-mMiniLMv2-L12-H384-v1 |
 | APP_API_KEY | /ask 的 Bearer key | 空值表示关闭鉴权 |
 | RETRIEVAL_MODE | 检索模式 | recipe 或 baseline |
 | RAG_CONFIG | TOML 文件 | 项目根目录 settings.toml |
@@ -70,7 +103,7 @@ localhost / 127.0.0.1:11434 会自动使用 Ollama 原生接口，即使 URL 带
 
 修改 Markdown 后，先停服务（Ctrl+C），执行 `--import-local --build-only`，再启动。仅修改检索或服务参数时重启即可。修改模型、分块参数或原文会改变索引指纹，旧集合留存供人工核查；确认不再使用后自行清理本项目的旧集合。不要在多个进程中同时构建同一集合。
 
-服务器部署使用 `python serve.py`，由 systemd、Windows 服务工具或容器负责进程重启。使用 **单 worker**，不要直接加 `--workers 4`：旧 /ask 会话、模型锁与流式取消信号都在进程内，网页历史则保存到 SQLite。默认等待锁 1 秒；/ask 满载返回 429，SSE 已建立时用流内 busy 事件表示繁忙。适合单机模型服务，不承诺多用户高吞吐。
+服务器部署使用 `python serve.py`，由 systemd、Windows 服务工具或容器负责进程重启。使用 **单 worker**，不要直接加 `--workers 4`：旧 /ask 会话、模型锁与流式取消信号都在进程内，网页历史保存到 PostgreSQL。默认等待锁 1 秒；/ask 满载返回 429，SSE 已建立时用流内 busy 事件表示繁忙。适合单机模型服务，不承诺多用户高吞吐。
 
 Windows 本地也可以使用后台脚本：`./scripts/start-api.ps1` 启动，`./scripts/stop-api.ps1` 停止，再次执行启动脚本完成重启。进程记录保存在 `logs/api-processes.json`，停止前会核对进程命令属于当前项目。后台停止会结束进程，应在没有进行中的请求时操作；日志在 `logs/` 中，不弹出终端窗口。
 
@@ -79,10 +112,13 @@ Windows 本地也可以使用后台脚本：`./scripts/start-api.ps1` 启动，`
 ```powershell
 docker build -t cook-rag:local .
 # Windows Docker Desktop：数据库和 Ollama 仍在宿主机的已发布端口
-docker run -d --name cook-rag-api -p 8000:8000 --env-file .env `
+docker run -d --name cook-rag-api -p 127.0.0.1:8000:8000 --env-file .env `
     -e API_HOST=0.0.0.0 `
     -e NEO4J_URI=bolt://host.docker.internal:7687 `
-    -e QDRANT_URL=http://host.docker.internal:6333 `
+    -e QDRANT_URL=http://host.docker.internal:6335 `
+    -e DATABASE_URL=postgresql+psycopg://cookrag:<your-password>@host.docker.internal:5432/cookrag `
+    -e REDIS_URL=redis://default:<your-password>@host.docker.internal:6379/0 `
+    -e HF_HOME=/app/runtime/models `
     -e LLM_BASE_URL=http://host.docker.internal:11434 `
     -e EMBED_BASE_URL=http://host.docker.internal:11434 `
     -e LLM_MODEL_TYPE=ollama -e EMBED_MODEL_TYPE=ollama `
@@ -94,11 +130,13 @@ docker run -d --name cook-rag-api -p 8000:8000 --env-file .env `
 
 Dockerfile 尚未在本次 Windows 验证中构建，部署前应在目标平台构建并跑健康检查。已配置的 GitHub Actions 执行离线单元测试，不自动启动真实数据库，也不自动部署。
 
+上面的密码占位需替换为自己的值，容器能否访问仅绑定回环的宿主机端口取决于 Docker Desktop 网络；服务器环境建议把数据库和 API 放到同一 Docker 网络并使用容器 DNS 名。默认镜像只安装运行依赖；启用重排用 `docker build --build-arg INSTALL_RERANK=true -t cook-rag:local .`，评估镜像另加 INSTALL_EVAL=true。
+
 ## 对外访问
 
 本地默认没有鉴权并只监听回环地址。开放网络访问时设置 `APP_API_KEY`，在反向代理上启用 HTTPS、请求体大小限制、速率限制和合适的生成等待超时。API key 只用于共享服务访问，不能替代用户身份与租户隔离。不要直接开放数据库端口到公网。
 
-网页历史、已完成轮次的菜单和已推荐候选会持久化；旧 /ask 会话与执行中的模型请求不持久化。备份聊天数据库时，停机后复制 runtime/history.sqlite3，运行中使用 SQLite backup 接口，不能只复制可能带 WAL 的主文件。runtime 目录包含问题与回答，不要提交到公开仓库。浏览器 Cookie 是记录归属标识，清除后不能自动找回该浏览器的历史。
+网页历史、菜单、候选、上传文档、任务与评估会持久化到 PostgreSQL；旧 /ask 会话与执行中的模型请求不持久化。使用 pg_dump 或数据库备份工具备份业务库，旧 SQLite 文件作为迁移前备份保留。runtime 的模型 / 评估缓存以及数据库备份不要提交到公开仓库。浏览器 Cookie 是记录归属标识，清除后不能自动找回该浏览器的历史。
 
 反向代理需为 /ask/stream 关闭响应缓冲和缓存（例如 Nginx proxy_buffering off），设置足够的读取超时；否则浏览器可能等待整段内容才显示。停止生成会发送取消信号并关闭生成器，但底层模型或检索正在等待响应时不能保证立即释放。
 
@@ -110,7 +148,7 @@ Dockerfile 尚未在本次 Windows 验证中构建，部署前应在目标平台
 | --- | --- |
 | ModuleNotFoundError | 用运行服务的同一个 `.venv` 解释器安装 requirements；不要混用系统 pip |
 | Neo4j 连接失败 | 容器是否运行、7687 是否发布、URI/密码/数据库是否正确 |
-| Qdrant 连接失败 | 6333 是否可达、URL 是否容器误用 localhost、API key 是否匹配 |
+| Qdrant 连接失败 | 配置端口是否可达（本项目新容器为 6335）、URL 是否容器误用 localhost、API key 是否匹配 |
 | health 为 model_missing | `ollama list` 是否有与配置完全一致的模型名 |
 | 启动需要等待 | 首次索引构建；看向量化进度，不要同时启动另一构建进程 |
 | 502 backend_error | 根据 request_id 查日志；检查模型驻留、连接及显存/内存 |

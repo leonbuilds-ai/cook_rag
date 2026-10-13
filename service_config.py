@@ -19,6 +19,9 @@ class ServiceConfig:
     log_max_bytes: int = 10485760
     log_backup_count: int = 3
     history_db_path: str = str(ROOT / 'runtime/history.sqlite3')
+    database_url: str = field(default='', repr=False)
+    redis_url: str = field(default='', repr=False)
+    upload_max_bytes: int = 50 * 1024 * 1024
 
     def __post_init__(self):
         if not 1 <= self.port <= 65535 or self.max_sessions < 1 or self.session_ttl_seconds < 1:
@@ -41,9 +44,11 @@ def load_service_config(path=None):
         if not name:
             raise ValueError('未知日志配置字段: ' + key)
         values[name] = value
-    if 'api_key' in values:
+    if any(key in values for key in ('api_key', 'database_url', 'redis_url')):
         raise ValueError('APP_API_KEY 必须放在环境变量中')
     values['api_key'] = os.getenv('APP_API_KEY', '')
+    values['database_url'] = os.getenv('DATABASE_URL', '')
+    values['redis_url'] = os.getenv('REDIS_URL', '')
     for name, variable, cast in [('host', 'API_HOST', str), ('port', 'API_PORT', int),
                                  ('history_db_path', 'HISTORY_DB_PATH', str)]:
         if variable in os.environ:

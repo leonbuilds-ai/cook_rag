@@ -51,6 +51,10 @@ class RAGConfig:
     conversation_max_chars: int = 6000
     retrieval_mode: str = 'recipe'
     source_base_url: str = 'https://github.com/leonbuilds-ai/cook_rag/blob/main/'
+    rerank_enabled: bool = False
+    rerank_model: str = 'cross-encoder/mmarco-mMiniLMv2-L12-H384-v1'
+    rerank_threads: int = 4
+    redis_url: str = field(default='', repr=False)
 
     def __post_init__(self):
         if self.embedding_provider not in {'openai', 'ollama'} or self.llm_provider not in {'openai', 'ollama'}:
@@ -70,7 +74,7 @@ class RAGConfig:
 
     def to_dict(self):
         result = asdict(self)
-        for key in ('embedding_api_key', 'llm_api_key', 'qdrant_api_key', 'neo4j_password'):
+        for key in ('embedding_api_key', 'llm_api_key', 'qdrant_api_key', 'neo4j_password', 'redis_url'):
             result[key] = '***' if result[key] else ''
         return result
 
@@ -85,10 +89,13 @@ def load_config(path=None):
     allowed = {f.name for f in fields(RAGConfig)}
     if set(values) - allowed:
         raise ValueError(f'未知配置字段: {sorted(set(values) - allowed)}')
-    secret_names = {'embedding_api_key', 'llm_api_key', 'qdrant_api_key', 'neo4j_password'}
+    secret_names = {'embedding_api_key', 'llm_api_key', 'qdrant_api_key', 'neo4j_password', 'redis_url'}
     if set(values) & secret_names:
         raise ValueError('密钥请放在 .env 或环境变量中')
     defaults = RAGConfig()
+    if 'RERANK_ENABLED' in os.environ: values['rerank_enabled'] = env('RERANK_ENABLED').lower() in {'true','1','yes'}
+    if 'RERANK_MODEL' in os.environ: values['rerank_model'] = env('RERANK_MODEL')
+    values['redis_url'] = env('REDIS_URL')
     # Fields backed by env factories use those values when explicitly set in the environment.
     env_fields = {'embedding_model': 'EMBED_MODEL_NAME', 'embedding_provider': 'EMBED_MODEL_TYPE',
         'embedding_base_url': 'EMBED_BASE_URL', 'llm_model': 'LLM_MODEL_ID',

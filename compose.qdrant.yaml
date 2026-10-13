@@ -1,0 +1,12 @@
+services:
+  qdrant:
+    image: qdrant/qdrant:v1.14.1
+    container_name: cook-rag-qdrant
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:6335:6333"
+    volumes:
+      - qdrant-data:/qdrant/storage
+volumes:
+  qdrant-data:
+    name: cook-rag-qdrant-data

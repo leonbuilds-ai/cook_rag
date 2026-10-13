@@ -2,6 +2,7 @@
 import hashlib
 import json
 import logging
+import uuid
 from pathlib import Path
 from qdrant_client import QdrantClient, models
 from langchain_core.documents import Document
@@ -19,14 +20,28 @@ class QdrantIndexConstructionModule:
         self.collection_name = None
         self.vectorstore = self
 
-    def prepare_collection(self, chunks):
-        identity = {'schema': 1, 'model': self.config.embedding_model,
+    def collection_identity(self, chunks, schema=2):
+        return {'schema': schema, 'model': self.config.embedding_model,
                     'provider': self.config.embedding_provider, 'url': self.config.embedding_base_url,
                     'num_ctx': self.config.embedding_num_ctx,
                     'chunks': [(d.page_content, d.metadata) for d in chunks]}
+
+    def prepare_collection(self, chunks):
+        identity = self.collection_identity(chunks)
         signature = hashlib.sha256(json.dumps(identity, ensure_ascii=False, sort_keys=True).encode()).hexdigest()[:20]
         self.collection_name = f'{self.config.qdrant_collection_name}_{signature}'
         self.manifest_path = Path(self.config.index_save_path) / f'{self.collection_name}.json'
+
+    def find_legacy_collection(self, chunks):
+        legacy = [Document(page_content=d.page_content, metadata={**d.metadata,
+                  'chunk_id':str(uuid.uuid5(uuid.NAMESPACE_URL,f"{d.metadata['parent_id']}:{i}:{d.page_content}"))})
+                  for i,d in enumerate(chunks)]
+        signature = hashlib.sha256(json.dumps(self.collection_identity(legacy,1),ensure_ascii=False,sort_keys=True).encode()).hexdigest()[:20]
+        name=f'{self.config.qdrant_collection_name}_{signature}'
+        manifest=Path(self.config.index_save_path)/f'{name}.json'
+        if manifest.exists() and self.client.collection_exists(name) and self.client.count(name,exact=True).count==len(chunks):
+            return name
+        return None
 
     def load_index(self, chunks):
         self.prepare_collection(chunks)
@@ -39,12 +54,39 @@ class QdrantIndexConstructionModule:
             return self
         return None
 
-    def build_vector_index(self, chunks):
+    def build_vector_index(self, chunks, reuse_collection=None, progress=None):
         if not chunks:
             raise ValueError('文档块列表不能为空')
         self.prepare_collection(chunks)
-        for start in range(0, len(chunks), self.config.embedding_batch_size):
-            batch = chunks[start:start + self.config.embedding_batch_size]
+        current = {}
+        for doc in chunks: current.setdefault((doc.metadata['parent_id'],doc.page_content),[]).append(doc)
+        reused = set()
+        if reuse_collection and reuse_collection != self.collection_name and self.client.collection_exists(reuse_collection):
+            info = self.client.get_collection(reuse_collection)
+            if not self.client.collection_exists(self.collection_name):
+                self.client.create_collection(self.collection_name, vectors_config=info.config.params.vectors)
+            offset = None
+            while True:
+                points, offset = self.client.scroll(reuse_collection, limit=128, offset=offset, with_vectors=True, with_payload=True)
+                copy=[]
+                for point in points:
+                    if not isinstance(point.vector,list) or not any(point.vector): continue
+                    payload=point.payload or {}
+                    key=(payload.get('metadata',{}).get('parent_id'),payload.get('page_content'))
+                    for doc in current.get(key,[]):
+                        cid=doc.metadata['chunk_id']
+                        if cid not in reused:
+                            copy.append(models.PointStruct(id=cid,vector=point.vector,
+                                        payload={'page_content':doc.page_content,'metadata':doc.metadata}))
+                            reused.add(cid)
+                if copy:
+                    self.client.upsert(self.collection_name, points=copy, wait=True)
+                    logger.info('复用向量进度: %s/%s',len(reused),len(chunks))
+                if offset is None: break
+        pending = [d for d in chunks if d.metadata['chunk_id'] not in reused]
+        self.last_build = {'reused_chunks':len(reused), 'embedded_chunks':len(pending)}
+        for start in range(0, len(pending), self.config.embedding_batch_size):
+            batch = pending[start:start + self.config.embedding_batch_size]
             vectors = self.embeddings.embed_documents([d.page_content for d in batch])
             if len(vectors) != len(batch) or not vectors or not vectors[0]:
                 raise ValueError('嵌入接口返回数量或维度无效')
@@ -59,7 +101,8 @@ class QdrantIndexConstructionModule:
                        payload={'page_content': d.page_content, 'metadata': d.metadata})
                       for d, v in zip(batch, vectors)]
             self.client.upsert(self.collection_name, points=points, wait=True)
-            logger.info('向量化进度: %s/%s', start + len(batch), len(chunks))
+            logger.info('向量化进度: %s/%s (复用 %s)', start + len(batch), len(pending), len(reused))
+            if progress: progress(start + len(batch), len(pending))
         self.manifest_path.parent.mkdir(parents=True, exist_ok=True)
         if self.client.count(self.collection_name, exact=True).count != len(chunks):
             raise ValueError('Qdrant 点数与分块数不一致，索引不能标记为完成')

@@ -77,6 +77,22 @@ start 提供 user_message_id 与 message_id；metadata 提供 resolved_query、k
 
 ## 错误与并发
 
+### 食谱与异步任务
+
+| 接口 | 用途 |
+| --- | --- |
+| GET /documents | 共享食谱目录，返回 ID、标题、来源、状态与创建时间 |
+| POST /documents/upload | multipart/form-data，file 必填，category 可选；最多 50 MiB UTF-8 .md / .txt |
+| GET /jobs | 当前浏览器最近 50 项任务 |
+| GET /jobs/{id} | 已校验归属的任务状态、阶段、progress 与错误说明 |
+| POST /jobs/{id}/retry | 重试失败任务，202 返回 queued 状态 |
+
+上传需包含标题、食材或原料、步骤或操作章节。成功返回 202 与任务 id / document_id，后续查询 status：queued / running / complete / failed。相同浏览器相同内容的已完成文档返回 duplicate=true；不重复创建已排队任务。任务按浏览器 Cookie 隔离，文档入库后属于共享本机知识库。
+
+413 file_too_large、422 unsupported_format / invalid_encoding / invalid_recipe / invalid_category、503 queue_unavailable 均给出中文提示。队列暂不可用时不把任务伪装为成功；已经提交到 PostgreSQL 但尚未投递的任务会在服务启动时恢复。
+
+上传来源采用 upload: 文档标识，url 为 null，可用 /recipes/{document_id} 查看原文；不返回本机路径或不存在的 GitHub 链接。新答案的 payload 保存 evaluation_sample（实际问题与生成上下文）及 retrieval_trace（缓存 / 重排状态和集合），用于本机离线回放。/health 同时检查 PostgreSQL、Redis 与 Qdrant 实际点数据。
+
 ```json
 {"error":{"code":"backend_error","message":"数据库或模型请求失败，请稍后重试。"},"request_id":"…"}
 ```

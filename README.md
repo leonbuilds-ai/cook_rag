@@ -6,7 +6,7 @@
 ![Qdrant](https://img.shields.io/badge/Vector-Qdrant-red)
 ![Neo4j](https://img.shields.io/badge/Graph-Neo4j-4581C3)
 
-一个可以查食谱、选菜、继续追问的中文食谱助手。知识库包含 **322 份 Markdown 食谱、10 个分类**。Neo4j 保存菜品、食材和步骤之间的关系，Qdrant 负责语义检索，中文 BM25 补充关键词匹配。回答提供原文链接，可以直接检查用量和操作是否有依据。
+一个可以查食谱、选菜、继续追问的中文食谱助手。初始知识库包含 **322 份 Markdown 食谱、10 个分类**，也可以从网页上传自己的食谱。Qdrant 与中文 BM25 召回候选，使用 RRF 融合，支持可选的多语言 Cross-Encoder 重排；Neo4j 保留食材与步骤关系。回答附带原文，可以直接检查用量和操作是否有依据。
 
 现在自带「**好好吃饭**」中文问答网站。启动服务后访问 `http://127.0.0.1:8000/`，在聊天页面选菜、问做法、连续追问和查看食谱原文。无需另外安装前端环境。
 
@@ -26,7 +26,12 @@
 | 功能 | 实现方式 |
 | --- | --- |
 | 中文问答网站 | 响应式聊天布局、真实流式回答、停止生成、复制回答、食谱原文弹窗 |
-| 历史对话 | SQLite 保存多个对话，支持切换、搜索、重命名、删除和恢复；重启后可继续追问 |
+| 历史对话 | PostgreSQL 保存多个对话，支持切换、搜索、重命名、删除和恢复；重启后可继续追问 |
+| 文档入库 | 网页上传 Markdown / TXT，后台切块、嵌入与写入；阶段进度、失败重试和内容去重 |
+| 数据持久化 | SQLAlchemy + PostgreSQL 保存浏览器用户、问答、菜单、文档、任务和评估；迁移原 SQLite 历史 |
+| Redis | 后台任务分发、状态镜像、嵌入缓存和检索缓存；按模型与语料版本失效 |
+| Cross-Encoder | 筛选与 RRF 后预测候选相关性，模型异常保留 RRF 并记录回退 |
+| 回答评估 | Ragas 四项指标，保存实际上下文与答案，历史回放和分数缓存 |
 | 快捷选菜 | 早餐、清淡、快手、晚餐分别检索；同一对话重复点击会换一批候选 |
 | 原图展示 | 可用原图通过本地接口加载、统一卡片尺寸；空文件与 LFS 指针显示缺图占位 |
 | 菜名、用量和做法查询 | 语义向量 + 中文 BM25 + RRF，补回完整食谱 |
@@ -50,7 +55,9 @@
 | 向量存储 | Qdrant 1.14 系列、余弦相似度、元数据前置过滤 |
 | 图存储 | Neo4j 5、Recipe / Ingredient / CookingStep / Category |
 | 文本检索 | jieba、rank-bm25、Reciprocal Rank Fusion |
-| 网页与历史 | 原生 HTML / CSS / JavaScript、Fetch SSE、SQLite、浏览器归属 Cookie |
+| 网页与历史 | 原生 HTML / CSS / JavaScript、Fetch SSE、浏览器归属 Cookie |
+| 业务存储与队列 | PostgreSQL 15、SQLAlchemy 2、psycopg 3、Redis 7 |
+| 重排与回答质量 | Sentence Transformers CrossEncoder、Ragas 0.3.9 |
 | 数据处理 | Markdown 标题分块、父文档回填、确定性文本块 ID |
 | 质量检查 | unittest、内存 Qdrant、FastAPI TestClient、GitHub Actions |
 
@@ -76,6 +83,8 @@ flowchart LR
 
 ## 快速开始
 
+本次升级的运行结果见 [平台验收记录](docs/validation-platform-2026-10-13.md)，存储与异步入库的设计见 [架构说明](docs/upgrade-architecture.md)。
+
 需要 Python 3.11+、运行中的 Neo4j 和 Qdrant，以及可用的模型服务。默认模型是 Ollama 的 `qwen3-embedding:8b` 和 `qwen3.5:9b`，可以通过 `.env` 换成自己的模型。本项目不自带模型权重。
 
 ```powershell
@@ -83,8 +92,16 @@ git clone https://github.com/leonbuilds-ai/cook_rag.git
 cd cook_rag
 py -3.11 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
+# 需要实验 Cross-Encoder 时再安装，日常使用不需要
+.\.venv\Scripts\python.exe -m pip install -r requirements-rerank.txt
+# 要运行回答质量评估时再安装
+.\.venv\Scripts\python.exe -m pip install -r requirements-eval.txt
 Copy-Item .env.example .env
 # 编辑 .env，填写 Neo4j 密码以及数据库、模型的实际地址
+# POSTGRES_PASSWORD、DATABASE_URL 和 REDIS_PASSWORD、REDIS_URL 中的密码保持一致
+docker compose -p cook-rag-postgres -f compose.postgres.yaml up -d --wait
+docker compose -p cook-rag-redis -f compose.redis.yaml up -d --wait
+docker compose -p cook-rag-qdrant -f compose.qdrant.yaml up -d
 ollama pull qwen3-embedding:8b
 ollama pull qwen3.5:9b
 
@@ -107,7 +124,7 @@ PyCharm 中选择项目 `.venv` 解释器，右键运行 `serve.py`，看到服�
 
 网页输入框支持 Enter 发送、Shift+Enter 换行，并兼容中文输入法。模型生成的内容会边生成边显示，点击发送按钮所在位置的方块可停止。推荐下方可以点击菜名问做法，或点“换一批推荐”；`[S1]` 和来源卡片可查看完整原文。
 
-左侧保存多段对话，可以搜索标题、切换、重命名或移到最近删除。刷新页面、重新打开浏览器或重启服务后，使用同一浏览器 Cookie 仍能访问历史并继续追问。聊天保存在 `runtime/history.sqlite3`，不会提交到 Git。网站使用本机接口；模型仍按 `.env` 配置调用。
+左侧保存多段对话，可以搜索标题、切换、重命名或移到最近删除。使用同一浏览器 Cookie 可以继续访问历史。设置 DATABASE_URL 后聊天保存在 PostgreSQL，启动时导入原 SQLite 文件并保留备份。侧栏“食谱库 · 上传食谱”支持上传 UTF-8 Markdown / TXT，后台完成入库后可以查询新菜并查看原文。
 
 ## HTTP 调用
 
@@ -165,7 +182,9 @@ Invoke-RestMethod http://127.0.0.1:8000/ask -Method Post `
 
 日志默认写入 `logs/cook_rag.jsonl`，单文件 10 MiB、保留 3 个备份。每个 HTTP 请求都有 `X-Request-ID`，错误响应也包含该 ID。服务日志不记录问题正文、回答正文或请求中的密钥。
 
-当前服务使用一个 worker，模型请求串行执行。网页聊天与菜单持久化到 SQLite，每个浏览器通过随机 Cookie 访问自己的记录；这不是账号登录系统。旧 `/ask` 接口的会话仍保存在进程内，默认最多 200 个、空闲 1 小时过期。对外开放前设置 `APP_API_KEY`，通过 HTTPS 反向代理访问，并关闭 SSE 响应缓冲。多租户身份校验、分布式队列和多 worker 协同尚未实现。
+当前服务使用一个 worker，问答与入库共用本机模型锁。网页聊天与菜单持久化到 PostgreSQL，每个浏览器通过随机 Cookie 访问自己的记录；这不是账号登录系统。旧 `/ask` 接口的会话仍保存在进程内，默认最多 200 个、空闲 1 小时过期。对外开放前设置 `APP_API_KEY`，通过 HTTPS 反向代理访问，并关闭 SSE 响应缓冲。多租户账号、多个 API 实例共享消费与分布式协同尚未实现。
+
+原本的 Qdrant 位于 Windows 绑定目录，本机验证出现零向量与 `OutputTooSmall` 错误。项目现使用独立的 `cook-rag-qdrant-data` Docker 卷，地址为 `http://127.0.0.1:6335`；原 6333 实例及其他集合保留。不要把新实例的 storage 绑定到 Windows 目录。改造的数据职责、任务恢复和评估边界见 [架构说明](docs/upgrade-architecture.md)。
 
 仓库提供 API [Dockerfile](Dockerfile)，模型与数据库单独运行。Docker 构建和 Linux CI 配置已提供，本次本机验证使用 Windows 虚拟环境和现有 Docker 数据库。
 
@@ -175,6 +194,9 @@ Invoke-RestMethod http://127.0.0.1:8000/ask -Method Post `
 
 ```powershell
 .\.venv\Scripts\python.exe evaluate.py --output evaluation/results.json
+.\.venv\Scripts\python.exe evaluate_answers.py --capture --limit 1
+# 回放同一份答案，不再生成，并复用已保存的评估分数
+.\.venv\Scripts\python.exe evaluate_answers.py --limit 1 --output evaluation/answer-replay.json
 .\.venv\Scripts\python.exe -m unittest discover -s tests -q
 .\.venv\Scripts\python.exe -m pip check
 ```
@@ -189,6 +211,8 @@ Invoke-RestMethod http://127.0.0.1:8000/ask -Method Post `
 
 新检索先按食谱去重，再融合向量排名、完整食谱 BM25 和精确菜名匹配，并统一少量常见别名。旧检索保留为 `baseline`，可通过 `RETRIEVAL_MODE=baseline` 回退。
 
+2026-10-13 重建索引后增加了真实 Cross-Encoder 对照：[新结果](evaluation/results-reranked.json)。24 条问题的 RRF Recall@5 为 1.0000、MRR@5 为 0.9583；当前重排模型分别为 0.9792、0.9514，没有整体提升，因此 `.env.example` 默认关闭重排。模型功能与评估入口保留，可通过 `RERANK_ENABLED=true` 验证其他模型后再启用。项目没有采用简历中的提升百分比。
+
 这是一个小规模人工标注集，Recall 已达到上限，提升主要体现在首个相关文档的排名。“吐司夹鸡蛋的早餐”从第 1 名退到第 2 名，逐条结果没有隐去退步。评估不包含回答质量和图路由，也不代表所有问题都能正确回答。标注、公式、实验边界和原始结果见 [评估说明](docs/evaluation.md) 与 [结果 JSON](evaluation/results.json)。
 
 ## 项目结构
@@ -201,9 +225,12 @@ service_config.py         服务与日志配置
 rag_modules/              图导入、Qdrant、检索、生成、会话、引用
 web/                      中文聊天网站，HTML / CSS / JavaScript
 web_routes.py             SSE、历史管理与本地图片接口
-chat_store.py             SQLite 对话、菜单与推荐记录
+chat_store.py / storage.py SQLAlchemy 对话、文档、任务和评估存储
+ingestion.py               Redis 后台入库与失败恢复
+redis_services.py          队列、嵌入与检索缓存
+evaluate_answers.py        Ragas 捕获、历史回放与分数缓存
 recipe_media.py           安全的原图路径解析与校验
-runtime/                  本地聊天数据库（不纳入 Git）
+runtime/                  SQLite 备份、模型与评估缓存（不纳入 Git）
 data/cook/                食谱原文与原有图片
 evaluation/               标注问题和对比结果
 evaluate.py               Recall@5、MRR@5 评估入口

@@ -6,8 +6,9 @@ import logging
 import statistics
 import time
 from datetime import datetime, timezone
+from dataclasses import replace
 from pathlib import Path
-from config import ROOT
+from config import ROOT, DEFAULT_CONFIG
 from main import RecipeRAGSystem
 from rag_modules.sources import canonical_source
 
@@ -43,22 +44,26 @@ def evaluate(dataset, system, split='all'):
     # Both algorithms see the same corpus, embedding model and Qdrant collection.
     for case in cases:
         row = dict(case)
-        for mode in ('baseline', 'recipe'):
+        for mode in ('baseline', 'recipe', 'reranked'):
             started = time.perf_counter()
             # Old application requested 15 fused chunks before recipe deduplication.
-            docs = retrieval.baseline_search(case['query'], top_k=15) if mode == 'baseline' else retrieval.recipe_search(case['query'], top_k=5)
+            if mode == 'baseline': docs = retrieval.baseline_search(case['query'], top_k=15)
+            elif mode == 'recipe': docs = retrieval.recipe_search(case['query'], top_k=5)
+            else:
+                docs, trace = system.reranker.rerank(case['query'], retrieval.recipe_search(case['query'], top_k=15), 5)
+                if not trace.get('applied'): raise ValueError('Reranked evaluation requires a real, available Cross-Encoder')
             sources = unique_sources(docs)
             row[mode] = {**metrics(sources, case['relevant']), 'retrieved': sources,
                          'latency_ms': round((time.perf_counter() - started) * 1000, 2)}
         records.append(row)
-        print(case['id'], {mode: row[mode]['mrr_at_5'] for mode in ('baseline', 'recipe')}, flush=True)
+        print(case['id'], {mode: row[mode]['mrr_at_5'] for mode in ('baseline', 'recipe', 'reranked')}, flush=True)
     summary = {}
     for group in ('all', 'dev', 'test'):
         subset = [r for r in records if group == 'all' or r['split'] == group]
         if subset:
             summary[group] = {mode: {'queries': len(subset), **{
                 metric: round(statistics.mean(r[mode][metric] for r in subset), 6)
-                for metric in ('recall_at_5', 'mrr_at_5', 'latency_ms')}} for mode in ('baseline', 'recipe')}
+                for metric in ('recall_at_5', 'mrr_at_5', 'latency_ms')}} for mode in ('baseline', 'recipe', 'reranked')}
     corpus = [(canonical_source(d.metadata['source']), d.page_content) for d in system.data_module.documents]
     return {'created_at': datetime.now(timezone.utc).isoformat(), 'k': 5,
         'dataset_sha256': hashlib.sha256(raw).hexdigest(),
@@ -76,7 +81,7 @@ def main():
     parser.add_argument('--split', choices=['dev', 'test', 'all'], default='all')
     args = parser.parse_args()
     logging.basicConfig(level=logging.WARNING)
-    system = RecipeRAGSystem()
+    system = RecipeRAGSystem(replace(DEFAULT_CONFIG,rerank_enabled=True))
     try:
         system.initialize_system()
         system.build_knowledge_base()

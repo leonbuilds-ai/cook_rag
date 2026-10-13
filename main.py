@@ -22,6 +22,11 @@ class RecipeRAGSystem:
         self.data_module = self.index_module = self.generation_module = None
         self.retrieval_module = self.query_router = None
         self.system_ready = False
+        from redis_services import RedisServices
+        from rag_modules.reranking import CrossEncoderReranker
+        self.cache = RedisServices(self.config.redis_url)
+        self.reranker = CrossEncoderReranker(self.config)
+        self.last_retrieval = {}
         self.conversation = ConversationMemory(self.config.conversation_max_turns,
                                                self.config.conversation_max_chars)
 
@@ -29,10 +34,15 @@ class RecipeRAGSystem:
         self.data_module = GraphDataPreparationModule(self.config)
         self.data_module.driver.verify_connectivity()
         self.index_module = QdrantIndexConstructionModule(self.config)
+        if self.config.redis_url:
+            from redis_services import CachedEmbeddings
+            self.index_module.embeddings = CachedEmbeddings(self.index_module.embeddings, self.cache,
+                {'model':self.config.embedding_model, 'provider':self.config.embedding_provider,
+                 'endpoint':self.config.embedding_base_url, 'num_ctx':self.config.embedding_num_ctx})
         self.index_module.client.get_collections()
         self.generation_module = GenerationIntegrationModule(config=self.config)
 
-    def build_knowledge_base(self, import_local=False, rebuild=False):
+    def build_knowledge_base(self, import_local=False, rebuild=False, reuse_collection=None, progress=None):
         self.system_ready = False
         if import_local:
             logger.info('导入本地食谱: %s', self.data_module.import_local_recipes())
@@ -43,7 +53,8 @@ class RecipeRAGSystem:
             docs = self.data_module.load_documents()
         chunks = self.data_module.chunk_documents(self.config.chunk_size, self.config.chunk_overlap)
         if rebuild or self.index_module.load_index(chunks) is None:
-            self.index_module.build_vector_index(chunks)
+            if not reuse_collection and not rebuild: reuse_collection = self.index_module.find_legacy_collection(chunks)
+            self.index_module.build_vector_index(chunks, reuse_collection=reuse_collection, progress=progress)
         self.retrieval_module = RetrievalOptimizationModule(self.index_module, chunks, docs,
                                                              self.config.retrieval_mode)
         self.graph_rag_retrieval = GraphRAGRetrieval(self.config, self.data_module)
@@ -85,8 +96,16 @@ class RecipeRAGSystem:
             if not allowed:
                 return [], self.query_router.analyze_query(question)
             filters['parent_id'] = allowed
-        docs, analysis = self.query_router.route_query(question, top_k=candidate_k, filters=filters,
-                                                      strategy=strategy)
+        collection = getattr(self.index_module, 'collection_name', None)
+        identity = {'collection':collection, 'query':question, 'strategy':strategy,
+                    'filters':filters, 'top_k':self.config.top_k, 'mode':self.config.retrieval_mode,
+                    'rerank':self.config.rerank_model if self.config.rerank_enabled else None}
+        cached = self.cache.get('retrieval', identity)
+        if cached is not None:
+            self.last_retrieval = {**cached['trace'], 'cache_hit':True}
+            return [Document(**d) for d in cached['docs']], self.query_router.analyze_query(question)
+        docs, analysis = self.query_router.route_query(question, top_k=candidate_k, filters=filters, strategy=strategy)
+        docs, rerank_trace = self.reranker.rerank(question, docs, candidate_k)
         if self.config.enable_parent_doc_retrieval:
             parents = {d.metadata['parent_id']: d for d in self.data_module.documents}
             result, seen = [], set()
@@ -107,6 +126,10 @@ class RecipeRAGSystem:
             docs = [Document(page_content=d.page_content, metadata={**d.metadata,
                     'preference_evidence': preference_evidence[d.metadata['parent_id']]}) for d in docs
                     if preference_evidence.get(d.metadata['parent_id'])]
+        self.last_retrieval = {'cache_hit':False, 'rerank':rerank_trace, 'collection':collection}
+        if rerank_trace.get('status') != 'fallback_rrf':
+            self.cache.put('retrieval', identity, {'docs':[{'page_content':d.page_content,'metadata':d.metadata} for d in docs],
+                                                  'trace':self.last_retrieval}, 600)
         return docs, analysis
 
     def ask_question_with_routing(self, question, stream=False, explain_routing=False, strategy='auto',
@@ -155,6 +178,10 @@ class RecipeRAGSystem:
             info['kind'] = 'no_results'
             return '没有找到符合条件的食谱，请调整菜品、食材或过滤条件。', analysis
         sources = references(docs, self.config.source_base_url)
+        info['retrieval_trace'] = self.last_retrieval
+        prepared = self.generation_module._build_context(docs)
+        contexts = prepared.split('\n'+'='*50+'\n')[1:] if isinstance(prepared,str) else [d.page_content for d in docs]
+        info['evaluation_sample'] = {'user_input':resolution.query, 'retrieved_contexts':contexts}
         if is_recommendation(resolution.query):
             # Recommend actual retrieved recipes once; details are fetched when a dish is selected.
             answer = self.generation_module.generate_list_answer(resolution.query, docs)
@@ -225,6 +252,7 @@ class RecipeRAGSystem:
                 print('数据库或模型请求失败，请查看服务日志。')
 
     def close(self):
+        self.cache.close()
         if self.index_module:
             self.index_module.close()
         if self.data_module:

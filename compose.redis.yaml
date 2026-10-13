@@ -1,0 +1,27 @@
+services:
+  redis:
+    image: registry-1.docker.io/library/redis:7-alpine
+    container_name: cook-rag-redis
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:6379:6379"
+    environment:
+      REDISCLI_AUTH: "${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env}"
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --requirepass
+      - "${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env}"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    stop_grace_period: 20s
+
+volumes:
+  redis-data:
+    name: cook-rag-redis-data

@@ -129,3 +129,29 @@ class GraphDataPreparationModule(DataPreparationModule):
 
     def close(self):
         self.driver.close()
+
+    def upsert_uploaded(self, doc):
+        rid = doc.metadata['parent_id']
+        if not rid.startswith('upload:'): raise ValueError('Uploaded document ID required')
+        ingredients, steps = self.extract_local_sections(doc.page_content)
+        self.run('''MERGE (r:Recipe:UploadedRecipeC9 {nodeId:$rid}) SET r += $props
+            WITH r OPTIONAL MATCH (r)-[rel]->() WHERE rel.owner='cook-upload' DELETE rel''', rid=rid,
+            props={'name':doc.metadata['dish_name'], 'content':doc.page_content, 'source':rid,
+                   'category':doc.metadata['category'], 'difficulty':doc.metadata['difficulty']})
+        self.run('''MATCH (r:UploadedRecipeC9 {nodeId:$rid}) MERGE (c:Category:LocalCategoryC9 {nodeId:$cid})
+            SET c.name=$category MERGE (r)-[rel:BELONGS_TO_CATEGORY]->(c) SET rel.owner='cook-upload' ''',
+            rid=rid, cid='local-c9:category:'+doc.metadata['category'], category=doc.metadata['category'])
+        for ing in ingredients:
+            self.run('''MATCH (r:UploadedRecipeC9 {nodeId:$rid}) MERGE (i:Ingredient:LocalIngredientC9 {nodeId:$iid})
+                SET i.name=$name MERGE (r)-[rel:REQUIRES]->(i) SET rel.amount=$amount, rel.owner='cook-upload' ''',
+                rid=rid, iid='local-c9:ingredient:'+hashlib.sha256(ing['name'].encode()).hexdigest(), **ing)
+        for order, step in enumerate(steps,1):
+            self.run('''MATCH (r:UploadedRecipeC9 {nodeId:$rid}) MERGE (s:CookingStep:UploadedStepC9 {nodeId:$sid})
+                SET s.name=$name, s.description=$text, s.stepNumber=$order
+                MERGE (r)-[rel:CONTAINS_STEP]->(s) SET rel.stepOrder=$order, rel.owner='cook-upload' ''',
+                rid=rid, sid=f'{rid}:step:{order}', name=f'步骤 {order}', text=step, order=order)
+
+    def remove_failed_upload(self, rid):
+        if not rid.startswith('upload:'): raise ValueError('Uploaded document ID required')
+        self.run('MATCH (r:UploadedRecipeC9 {nodeId:$rid}) DETACH DELETE r', rid=rid)
+        self.run('MATCH (s:UploadedStepC9) WHERE s.nodeId STARTS WITH $prefix DETACH DELETE s', prefix=rid+':step:')

@@ -41,6 +41,7 @@
       <button data-question="推荐三道简单易做的主食" data-topic="quick"><svg><use href="#i-clock"/></svg>简单快手<span>简</span></button>
       <button data-question="晚餐吃什么" data-topic="dinner"><svg><use href="#i-bowl"/></svg>今晚吃好<span>暖</span></button>
     </nav>
+    <button id="open-library" class="library-button"><svg><use href="#i-book"/></svg>食谱库 · 上传食谱</button>
     <section class="conversation-nav"><div class="history-heading"><span>历史对话</span><button id="show-trash" title="查看最近删除" aria-label="查看最近删除"><svg><use href="#i-trash"/></svg></button></div><label class="sr-only" for="history-search">搜索对话</label><input id="history-search" type="search" placeholder="搜索历史对话"><div id="chat-list" role="navigation" aria-label="历史对话列表"><p class="history-empty">还没有对话，先聊聊今天吃什么。</p></div></section>
     <div class="sidebar-bottom"><div class="little-note"><svg><use href="#i-book"/></svg><strong>每一餐，都有出处</strong><p>回答附带食谱原文，<br>做法与用量随时可查。</p></div><button class="key-button" id="connection-settings" hidden><svg><use href="#i-key"/></svg>访问设置</button><span class="sidebar-caption">一日三餐，认真对待。</span></div>
   </aside>
@@ -63,6 +64,14 @@
 <dialog id="settings-dialog" class="settings-dialog"><div class="dialog-heading"><h2>访问设置</h2><button class="icon-button" id="close-settings" aria-label="关闭设置"><svg><use href="#i-close"/></svg></button></div><p>服务开启访问验证时，在这里填写管理员提供的访问密钥。仅保留在当前浏览器标签页中。</p><form id="settings-form"><label for="api-key">访问密钥</label><input id="api-key" type="password" autocomplete="off" placeholder="未开启验证时无需填写"><button class="primary-button" type="submit">保存并继续</button></form></dialog>
 <dialog id="rename-dialog" class="settings-dialog"><div class="dialog-heading"><h2>重命名对话</h2><button id="close-rename" class="icon-button" aria-label="关闭重命名"><svg><use href="#i-close"/></svg></button></div><form id="rename-form"><label for="chat-name">对话名称</label><input id="chat-name" maxlength="60" required><button class="primary-button" type="submit">保存名称</button></form></dialog>
 <button class="jump-bottom" id="jump-bottom" aria-label="回到最新回答" hidden><svg><use href="#i-arrow"/></svg></button>
+<dialog id="library-dialog" class="recipe-dialog library-dialog">
+  <div class="dialog-heading"><div><span class="eyebrow">把拿手菜留下来</span><h2>食谱库</h2></div><button id="close-library" class="icon-button" aria-label="关闭食谱库"><svg><use href="#i-close"/></svg></button></div>
+  <p class="library-note">上传含标题、食材和步骤的 UTF-8 Markdown 或 TXT 文件，最大 50 MiB。入库后加入这台电脑的共享食谱库，问答时可以查到并引用原文。</p>
+  <form id="upload-form" class="upload-form"><label for="recipe-file">选择食谱文件</label><input type="file" id="recipe-file" accept=".md,.txt" required><label for="recipe-category">分类</label><select id="recipe-category"><option>其他</option><option>早餐</option><option>主食</option><option>素菜</option><option>荤菜</option><option>汤品</option><option>水产</option><option>甜品</option><option>饮品</option><option>调料</option><option>半成品</option></select><button id="upload-button" class="primary-button" type="submit">开始入库</button></form>
+  <div id="upload-status" role="status"></div>
+  <section class="job-section"><h3>最近入库任务</h3><div id="job-list"></div></section>
+  <label for="document-search" class="sr-only">搜索食谱库</label><input id="document-search" type="search" placeholder="按菜名搜索食谱库" class="document-search"><div id="document-list" class="document-list"></div>
+</dialog>
 <div class="toast" id="toast" role="status" hidden></div>
 </body>
 </html>

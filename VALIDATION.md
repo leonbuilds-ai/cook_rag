@@ -1,5 +1,7 @@
 # 升级验证记录
 
+最新 PostgreSQL、Redis、异步上传、Cross-Encoder 与 Ragas 验收见 [2026-10-13 平台验收](docs/validation-platform-2026-10-13.md)：79 项测试通过，真实上传与流式引用通过，三条历史答案再次评估全部命中缓存。Cross-Encoder 实测略有回退，默认关闭。
+
 最新的 FastAPI、目录迁移与检索评估验收见 [2026-10-12 服务验收](docs/validation-2026-10-12.md)。下面保留此前升级与修复的记录。
 
 中文网站已升级为流式聊天与持久化历史，72 项回归与真实模型、浏览器检查见 [流式与历史验收](docs/validation-streaming-2026-10-12.md)，操作说明见 [网站使用](docs/website.md)。

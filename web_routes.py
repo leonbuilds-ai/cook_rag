@@ -25,13 +25,15 @@ COOKIE = 'cook_browser'
 
 
 def register_web_routes(app, config, settings, authenticate, Error, AskModel):
-    store = ChatStore(settings.history_db_path)
+    store = ChatStore(settings.history_db_path, settings.database_url)
     media = RecipeMedia(config.data_path)
     app.state.chat_store = store
     app.state.recipe_media = media
     app.state.active_chats = set()
     app.state.stream_cancellations = {}
     active_lock = threading.Lock()
+    from redis_services import RedisServices
+    app.state.redis = RedisServices(settings.redis_url)
 
     class StreamAsk(AskModel):
         chat_id: UUID
@@ -297,3 +299,6 @@ def register_web_routes(app, config, settings, authenticate, Error, AskModel):
         return StreamingResponse(response_events(), media_type='text/event-stream', headers={
             'Cache-Control': 'no-cache, no-transform', 'X-Accel-Buffering': 'no',
             'X-Request-ID': request_id})
+
+    from document_routes import register_document_routes
+    register_document_routes(app, settings, authenticate, owner, Error)

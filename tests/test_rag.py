@@ -80,6 +80,15 @@ class IndexTests(unittest.TestCase):
         self.index.build_vector_index(self.chunks)
         self.assertEqual(self.index.get_collection_stats()['row_count'], 2)
 
+    def test_incremental_index_reuses_existing_vectors(self):
+        self.index.build_vector_index(self.chunks)
+        original=self.index.collection_name
+        self.index.build_vector_index(self.chunks + [document('新菜','3')],reuse_collection=original)
+        self.assertEqual(self.index.last_build,{'reused_chunks':2,'embedded_chunks':1})
+        self.assertEqual(self.embeddings.calls,3)
+        self.assertTrue(self.client.collection_exists(original))
+        self.assertEqual(self.index.get_collection_stats()['row_count'],3)
+
     def test_hybrid_metadata_filter(self):
         self.index.build_vector_index(self.chunks)
         retrieval = RetrievalOptimizationModule(self.index, self.chunks)
@@ -89,6 +98,14 @@ class IndexTests(unittest.TestCase):
 
 
 class DataTests(unittest.TestCase):
+    def test_new_document_does_not_change_existing_chunk_ids(self):
+        data=DataPreparationModule('.')
+        original=Document(page_content='# 原食谱\n## 步骤\n- 煮熟。',metadata={'parent_id':'a','source':'a.md'})
+        data.documents=[original]; before=[d.metadata['chunk_id'] for d in data.chunk_documents(100,10)]
+        data.documents=[Document(page_content='# 新食谱\n## 步骤\n- 蒸熟。',metadata={'parent_id':'b','source':'b.md'}),original]
+        after=[d.metadata['chunk_id'] for d in data.chunk_documents(100,10) if d.metadata['parent_id']=='a']
+        self.assertEqual(before,after)
+
     def test_chunk_ids_stable_and_size_bounded(self):
         data = DataPreparationModule('.')
         data.documents = [Document(page_content='# 菜谱\n## 操作\n' + '搅拌。' * 300,

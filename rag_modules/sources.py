@@ -22,7 +22,7 @@ def references(docs, base_url=''):
         seen.add(key)
         path = canonical_source(doc.metadata.get('source', ''))
         # Only expose repository paths or graph identifiers, never machine-specific paths.
-        if not path.startswith(('data/cook/', 'neo4j:')):
+        if not path.startswith(('data/cook/', 'neo4j:', 'upload:')):
             path = 'neo4j:' + str(key)
         result.append({'id': f'S{len(result) + 1}', 'title': doc.metadata.get('dish_name', '食谱'),
             'document_id': str(key), 'path': path,

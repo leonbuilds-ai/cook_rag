@@ -226,4 +226,38 @@ async function boot(){
   }catch{/* Keep the old tab data if service or auth is unavailable. */}}
   if(state.chatId){if(state.chats.some(c=>c.id===state.chatId)) await openChat(state.chatId); else selectId(null);}
 }
+let libraryDocuments=[], libraryTimer;
+function renderDocuments(){
+  const query=$('#document-search').value.trim(); const list=$('#document-list'); list.replaceChildren();
+  const docs=libraryDocuments.filter(d=>d.status==='ready' && d.title.includes(query));
+  const heading=document.createElement('p'); heading.className='library-note'; heading.textContent=`${docs.length} 份可查食谱`; list.append(heading);
+  for(const doc of docs){const button=document.createElement('button'); button.className='document-row'; button.textContent=doc.title;
+    button.onclick=()=>{openRecipe({document_id:doc.id,title:doc.title});}; list.append(button);}
+}
+async function refreshLibrary(){
+  clearTimeout(libraryTimer);
+  try{const [catalog,tasks]=await Promise.all([api('/documents'),api('/jobs')]); libraryDocuments=catalog.documents; renderDocuments();
+    const list=$('#job-list'); list.replaceChildren();
+    if(!tasks.jobs.length) list.textContent='还没有上传记录。';
+    for(const job of tasks.jobs){const row=document.createElement('div'); row.className='job-row';
+      const title=document.createElement('span'); const doc=libraryDocuments.find(d=>d.id===job.document_id); title.textContent=(doc?.title || '食谱')+' · '+job.stage; row.append(title);
+      const progress=document.createElement('progress'); progress.max=100; progress.value=job.progress; progress.setAttribute('aria-label','入库进度'); row.append(progress);
+      if(job.status==='failed'){const note=document.createElement('p'); note.textContent=job.error || '入库失败'; row.append(note); const retry=document.createElement('button'); retry.textContent='重试入库'; retry.onclick=async()=>{try{await api('/jobs/'+job.id+'/retry',{method:'POST'}); refreshLibrary();}catch(error){notify(error.message);}}; row.append(retry);}
+      list.append(row);
+    }
+    if($('#library-dialog').open && tasks.jobs.some(j=>['queued','running'].includes(j.status))) libraryTimer=setTimeout(refreshLibrary,1500);
+  }catch(error){$('#upload-status').textContent=error.message;}
+}
+$('#open-library').onclick=()=>{$('#library-dialog').showModal(); closeSidebar(); refreshLibrary();};
+$('#close-library').onclick=()=>{$('#library-dialog').close(); clearTimeout(libraryTimer);};
+$('#document-search').oninput=renderDocuments;
+$('#upload-form').onsubmit=async event=>{event.preventDefault(); const file=$('#recipe-file').files[0]; if(!file) return;
+  if(file.size>50*1024*1024) return $('#upload-status').textContent='文件不能超过 50 MiB。';
+  const button=$('#upload-button'); button.disabled=true; $('#upload-status').textContent='正在上传…';
+  try{const form=new FormData(); form.append('file',file); form.append('category',$('#recipe-category').value);
+    const response=await fetch('/documents/upload',{method:'POST',headers:state.key?{'Authorization':`Bearer ${state.key}`}:{},body:form});
+    const result=await response.json(); if(!response.ok) throw new Error(result.error?.message || friendlyError(response.status));
+    $('#upload-status').textContent=result.duplicate?'这份食谱已经入库，可直接提问。':'上传成功，正在后台入库。可以先继续聊天。'; $('#recipe-file').value=''; await refreshLibrary();
+  }catch(error){$('#upload-status').textContent=error.message;}finally{button.disabled=false;}
+};
 boot(); setInterval(checkHealth,45000);

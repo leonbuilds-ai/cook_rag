@@ -155,9 +155,13 @@ class DataPreparationModule:
         self.parent_child_map.clear()
 
         # 为每个chunk添加基础元数据
+        parent_offsets = {}
         for i, chunk in enumerate(chunks):
+            parent = chunk.metadata['parent_id']
+            offset = parent_offsets.get(parent,0)
+            parent_offsets[parent] = offset + 1
             chunk.metadata['chunk_id'] = str(uuid.uuid5(uuid.NAMESPACE_URL,
-                f"{chunk.metadata['parent_id']}:{i}:{chunk.page_content}"))
+                f"{parent}:{offset}:{chunk.page_content}"))
             chunk.metadata['doc_type'] = 'child'
             self.parent_child_map[chunk.metadata['chunk_id']] = chunk.metadata['parent_id']
             chunk.metadata['batch_index'] = i  # 在当前批次中的索引
